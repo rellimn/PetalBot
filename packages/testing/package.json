@@ -1,0 +1,20 @@
+{
+  "name": "@petalbot/testing",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@petalbot/core": "workspace:*",
+    "@petalbot/sdk": "workspace:*",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@petalbot/tooling": "workspace:*"
+  }
+}

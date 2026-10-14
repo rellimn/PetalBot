@@ -1,0 +1,38 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-radius: var(--pb-radius-lg);
+  background: var(--pb-surface-2);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--pb-space-2);
+  padding: var(--pb-space-3) var(--pb-space-3) 0;
+}
+
+.title {
+  flex: 1;
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--pb-font-size);
+  font-weight: var(--pb-font-weight-bold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  gap: var(--pb-space-1);
+}
+
+.body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--pb-row-gap);
+  min-height: 0;
+  padding: var(--pb-space-3);
+}

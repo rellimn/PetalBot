@@ -1,0 +1,2457 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "PetalBot HTTP API",
+    "version": "1.0.0",
+    "description": "The HTTP API of one PetalBot instance.\n\n- Authentication: the `petalbot_session` cookie from `/auth/login` -> `/auth/callback`.\n- Every non-GET request outside `/api/p/*` must send `Origin` equal to the public URL.\n- Errors: `{ \"error\": { \"code\", \"message\", \"plugins\"? } }`, never a stack trace.\n- Validation errors (`code: validation`) may list `issues: [{ path, message }]`.\n- Browser navigations (`Accept: text/html`) to `/auth/*` that fail redirect to\n  `/login-error?reason=forbidden|expired|failed|unavailable` instead.\n- Not listed: `GET /plugins/{pluginId}/{hash}/…` serves the panel bundle of a running plugin\n  (panel session required), `GET /plugins/{pluginId}/overlays/{overlay}/{hash}/…` serves its\n  overlay bundles (public), and every other unknown GET path serves the panel (SPA fallback).\n- Also not listed: `GET /overlay/{pluginId}/{overlay}/{instanceId}?t=<token>` serves the overlay\n  host page for OBS (the token is checked by the WebSocket), `GET /overlay/_/…` its files.\n- Request bodies are limited to 1 MiB.\n- Plugin routes live under `/api/p/{pluginId}/…`. They are registered at runtime with\n  `ctx.http.route` and are not listed here; see docs/api/plugin-api.md."
+  },
+  "components": {
+    "securitySchemes": {
+      "session": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "petalbot_session",
+        "description": "Session cookie set by /auth/callback (or /auth/login under dev auth)."
+      }
+    },
+    "schemas": {
+      "ErrorBody": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "plugins": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The affected plugins, for code confirmation_required"
+              },
+              "issues": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "array",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ]
+                      }
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "message"
+                  ]
+                },
+                "description": "For code validation: what failed where (zod issues)"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "Me": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/PanelUser"
+          },
+          "devAuth": {
+            "type": "boolean",
+            "description": "True if PETALBOT_DEV_AUTH logged this user in"
+          }
+        },
+        "required": [
+          "user",
+          "devAuth"
+        ]
+      },
+      "PanelUser": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "mod"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "role"
+        ]
+      },
+      "Preferences": {
+        "type": "object",
+        "properties": {
+          "darkScheme": {
+            "type": "string",
+            "enum": [
+              "rose",
+              "lavender",
+              "spring-leaf",
+              "peach-blossom",
+              "dark-gray"
+            ],
+            "default": "rose"
+          },
+          "lightScheme": {
+            "type": "string",
+            "enum": [
+              "light",
+              "cream"
+            ],
+            "default": "light"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "system",
+              "dark",
+              "light"
+            ],
+            "default": "system",
+            "description": "system follows the browser; dark and light force one of the two schemes"
+          },
+          "density": {
+            "type": "string",
+            "enum": [
+              "comfortable",
+              "compact"
+            ],
+            "default": "comfortable"
+          },
+          "activePreset": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Id of one of the user's presets; null shows the first"
+          }
+        }
+      },
+      "PresetList": {
+        "type": "object",
+        "properties": {
+          "presets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Preset"
+            }
+          }
+        },
+        "required": [
+          "presets"
+        ]
+      },
+      "Preset": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "width": {
+                  "type": "integer"
+                },
+                "widgets": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "plugin": {
+                        "type": "string"
+                      },
+                      "widget": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "plugin",
+                      "widget"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "width",
+                "widgets"
+              ]
+            }
+          },
+          "createdAt": {
+            "type": "number"
+          },
+          "updatedAt": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "columns",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "PresetInput": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "width": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100,
+                  "description": "Relative width of the column"
+                },
+                "widgets": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "plugin": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      },
+                      "widget": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      }
+                    },
+                    "required": [
+                      "plugin",
+                      "widget"
+                    ]
+                  },
+                  "maxItems": 20
+                }
+              },
+              "required": [
+                "width",
+                "widgets"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 3
+          }
+        },
+        "required": [
+          "name",
+          "columns"
+        ]
+      },
+      "PluginList": {
+        "type": "object",
+        "properties": {
+          "plugins": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PluginInfo"
+            }
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiscoveryProblem"
+            },
+            "description": "Plugin folders that could not be read"
+          }
+        },
+        "required": [
+          "plugins",
+          "problems"
+        ]
+      },
+      "PluginInfo": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "dir": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "starting",
+              "running",
+              "stopping",
+              "failed"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "degraded": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          },
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "optionalDependencies": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "hasPanel": {
+            "type": "boolean",
+            "description": "The manifest declares a panel entry"
+          },
+          "hasSettings": {
+            "type": "boolean",
+            "description": "Absent until the core has loaded the plugin definition"
+          },
+          "panel": {
+            "type": "object",
+            "properties": {
+              "entry": {
+                "type": "string",
+                "description": "URL of the panel bundle"
+              },
+              "styles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "URLs of its stylesheets"
+              }
+            },
+            "required": [
+              "entry",
+              "styles"
+            ],
+            "description": "Present while the plugin runs with a readable panel bundle"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "dir",
+          "state",
+          "enabled",
+          "degraded",
+          "dependencies",
+          "optionalDependencies",
+          "hasPanel"
+        ]
+      },
+      "DiscoveryProblem": {
+        "type": "object",
+        "properties": {
+          "dir": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dir",
+          "message"
+        ]
+      },
+      "DeletedData": {
+        "type": "object",
+        "properties": {
+          "droppedTables": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "overlayInstances": {
+            "type": "integer",
+            "description": "Overlay instances deleted with the data"
+          }
+        },
+        "required": [
+          "droppedTables",
+          "overlayInstances"
+        ]
+      },
+      "PluginSettings": {
+        "type": "object",
+        "properties": {
+          "values": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "schema": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {},
+            "description": "JSON Schema (input) of the settings; null if the plugin has none"
+          }
+        },
+        "required": [
+          "values",
+          "schema"
+        ]
+      },
+      "PluginSettingsValues": {
+        "type": "object",
+        "properties": {
+          "values": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "values"
+        ]
+      },
+      "OverlayList": {
+        "type": "object",
+        "properties": {
+          "instances": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OverlayInstance"
+            }
+          },
+          "overlays": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeclaredOverlay"
+            },
+            "description": "Overlays the running plugins declare (instances can be created for these)"
+          }
+        },
+        "required": [
+          "instances",
+          "overlays"
+        ]
+      },
+      "OverlayInstance": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "pluginId": {
+            "type": "string"
+          },
+          "overlay": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "createdAt": {
+            "type": "number"
+          },
+          "rotatedAt": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "pluginId",
+          "overlay",
+          "name",
+          "config",
+          "createdAt",
+          "rotatedAt"
+        ]
+      },
+      "DeclaredOverlay": {
+        "type": "object",
+        "properties": {
+          "pluginId": {
+            "type": "string"
+          },
+          "overlay": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "JSON Schema (input) of the instance config"
+          },
+          "hasBundle": {
+            "type": "boolean",
+            "description": "The plugin has a built bundle for this overlay"
+          }
+        },
+        "required": [
+          "pluginId",
+          "overlay",
+          "schema",
+          "hasBundle"
+        ]
+      },
+      "OverlayToken": {
+        "type": "object",
+        "properties": {
+          "instance": {
+            "$ref": "#/components/schemas/OverlayInstance"
+          },
+          "token": {
+            "type": "string",
+            "description": "Shown only now; store the URL in OBS"
+          },
+          "url": {
+            "type": "string",
+            "description": "Browser-source URL including the token"
+          }
+        },
+        "required": [
+          "instance",
+          "token",
+          "url"
+        ]
+      },
+      "EventPage": {
+        "type": "object",
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventEnvelope"
+            }
+          }
+        },
+        "required": [
+          "events"
+        ]
+      },
+      "EventEnvelope": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "ULID, sortable by creation time"
+          },
+          "name": {
+            "type": "string",
+            "description": "Qualified event name, e.g. \"chat.message\""
+          },
+          "payload": {},
+          "source": {
+            "type": "string",
+            "description": "Id of the emitting plugin"
+          },
+          "timestamp": {
+            "type": "number"
+          },
+          "causedBy": {
+            "type": "string",
+            "description": "Envelope id of the event whose handler emitted this"
+          },
+          "depth": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "source",
+          "timestamp",
+          "depth"
+        ]
+      },
+      "LogPage": {
+        "type": "object",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogEntry"
+            }
+          }
+        },
+        "required": [
+          "entries"
+        ]
+      },
+      "LogEntry": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "Increasing; pass it as `before` to page back"
+          },
+          "time": {
+            "type": "number",
+            "description": "Unix time in milliseconds"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "debug",
+              "info",
+              "warn",
+              "error"
+            ]
+          },
+          "plugin": {
+            "type": "string",
+            "description": "Absent for core entries"
+          },
+          "message": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "id",
+          "time",
+          "level",
+          "message",
+          "data"
+        ]
+      }
+    },
+    "parameters": {}
+  },
+  "paths": {
+    "/auth/login": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Start logging in",
+        "description": "Redirects to the OIDC provider. With PETALBOT_DEV_AUTH it logs in directly and redirects to returnTo.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Same-origin path to return to. Default \"/\"."
+            },
+            "required": false,
+            "description": "Same-origin path to return to. Default \"/\".",
+            "name": "returnTo",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to the provider or to returnTo"
+          },
+          "503": {
+            "description": "A required service is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/callback": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Finish logging in",
+        "description": "The provider redirects here. Users whose groups map to no role are rejected with 403.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "code",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "state",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "error",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Logged in; redirect to returnTo"
+          },
+          "400": {
+            "description": "Invalid request (code validation or auth_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A required service is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Log out",
+        "description": "Revokes the session and closes its WebSockets (close code 4001).",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Logged out"
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "The logged-in user",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The logged-in user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me/preferences": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Appearance preferences and the active preset",
+        "description": "Minimum role: mod. Only ever the logged-in user's own data.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The preferences",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preferences"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Replace the preferences",
+        "description": "Minimum role: mod. Only ever the logged-in user's own data. Missing fields take their defaults. activePreset must be one of the user's presets.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Preferences"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The saved preferences",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preferences"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (code validation or auth_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me/presets": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "The user's dashboard presets",
+        "description": "Minimum role: mod. Only ever the logged-in user's own data. Oldest first. An empty list means the panel creates a starter preset.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The presets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresetList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Create a preset",
+        "description": "Minimum role: mod. Only ever the logged-in user's own data. At most 20 presets per user (409 conflict).",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PresetInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The new preset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preset"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (code validation or auth_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with the current state (conflict, unavailable or confirmation_required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me/presets/{id}": {
+      "put": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Replace a preset's name and layout",
+        "description": "Minimum role: mod. Only ever the logged-in user's own data.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Preset id"
+            },
+            "required": true,
+            "description": "Preset id",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PresetInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated preset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preset"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (code validation or auth_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Delete a preset",
+        "description": "Minimum role: mod. Only ever the logged-in user's own data. If it was active, activePreset becomes null.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Preset id"
+            },
+            "required": true,
+            "description": "Preset id",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plugins": {
+      "get": {
+        "tags": [
+          "plugins"
+        ],
+        "summary": "List plugins",
+        "description": "Minimum role: mod.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "All discovered plugins",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plugins/rescan": {
+      "post": {
+        "tags": [
+          "plugins"
+        ],
+        "summary": "Re-read plugin manifests",
+        "description": "Minimum role: owner.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Rescanned"
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plugins/{id}/enable": {
+      "post": {
+        "tags": [
+          "plugins"
+        ],
+        "summary": "Enable a plugin",
+        "description": "Minimum role: owner. Without withDependencies, answers 409 confirmation_required listing the dependencies that would be enabled too.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Plugin id"
+            },
+            "required": true,
+            "description": "Plugin id",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "withDependencies": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The plugin after enabling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (code validation or auth_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with the current state (conflict, unavailable or confirmation_required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plugins/{id}/disable": {
+      "post": {
+        "tags": [
+          "plugins"
+        ],
+        "summary": "Disable a plugin",
+        "description": "Minimum role: owner. Without withDependents, answers 409 confirmation_required listing the dependents that would be disabled too. Data is kept.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Plugin id"
+            },
+            "required": true,
+            "description": "Plugin id",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "withDependents": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The plugin after disabling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (code validation or auth_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with the current state (conflict, unavailable or confirmation_required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plugins/{id}/reload": {
+      "post": {
+        "tags": [
+          "plugins"
+        ],
+        "summary": "Reload a running plugin with fresh code",
+        "description": "Minimum role: owner. Running dependents are restarted too.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Plugin id"
+            },
+            "required": true,
+            "description": "Plugin id",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plugin after reloading",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginInfo"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with the current state (conflict, unavailable or confirmation_required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plugins/{id}/data": {
+      "delete": {
+        "tags": [
+          "plugins"
+        ],
+        "summary": "Delete a disabled plugin's data",
+        "description": "Minimum role: owner. Drops its tables, kv, settings, secrets and overlay instances. confirm must equal the plugin id.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Plugin id"
+            },
+            "required": true,
+            "description": "Plugin id",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "confirm": {
+                    "type": "string",
+                    "description": "Must equal the plugin id"
+                  }
+                },
+                "required": [
+                  "confirm"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What was deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedData"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (code validation or auth_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with the current state (conflict, unavailable or confirmation_required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plugins/{id}/settings": {
+      "get": {
+        "tags": [
+          "plugins"
+        ],
+        "summary": "Read plugin settings",
+        "description": "Minimum role: owner. Also works for stopped plugins.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Plugin id"
+            },
+            "required": true,
+            "description": "Plugin id",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored values and the settings schema",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with the current state (conflict, unavailable or confirmation_required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "plugins"
+        ],
+        "summary": "Update plugin settings",
+        "description": "Minimum role: owner. The patch is merged into the stored values and validated as a whole. Running plugins are notified.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Plugin id"
+            },
+            "required": true,
+            "description": "Plugin id",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The values after the update",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginSettingsValues"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (code validation or auth_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with the current state (conflict, unavailable or confirmation_required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/overlays": {
+      "get": {
+        "tags": [
+          "overlays"
+        ],
+        "summary": "List overlay instances",
+        "description": "Minimum role: owner. Tokens are never listed. Also lists the overlays running plugins declare.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "All overlay instances",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverlayList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "overlays"
+        ],
+        "summary": "Create an overlay instance",
+        "description": "Minimum role: owner. The plugin must be running. The response is the only time the token is shown.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "pluginId": {
+                    "type": "string"
+                  },
+                  "overlay": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 40,
+                    "description": "Tells instances apart in the overlay manager, e.g. the OBS scene"
+                  },
+                  "config": {
+                    "type": "object",
+                    "additionalProperties": {}
+                  }
+                },
+                "required": [
+                  "pluginId",
+                  "overlay",
+                  "name"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The new instance and its token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverlayToken"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (code validation or auth_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with the current state (conflict, unavailable or confirmation_required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/overlays/{id}": {
+      "patch": {
+        "tags": [
+          "overlays"
+        ],
+        "summary": "Rename an overlay instance and/or replace its config",
+        "description": "Minimum role: owner. Changing the config needs the plugin running; renaming does not. Open overlays get the new config at once (WebSocket overlay.config).",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Overlay instance id"
+            },
+            "required": true,
+            "description": "Overlay instance id",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 40,
+                    "description": "Tells instances apart in the overlay manager, e.g. the OBS scene"
+                  },
+                  "config": {
+                    "type": "object",
+                    "additionalProperties": {}
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated instance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverlayInstance"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (code validation or auth_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with the current state (conflict, unavailable or confirmation_required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "overlays"
+        ],
+        "summary": "Revoke an overlay instance",
+        "description": "Minimum role: owner. Its token stops working and open overlay sockets close with 4003.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Overlay instance id"
+            },
+            "required": true,
+            "description": "Overlay instance id",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/overlays/{id}/rotate": {
+      "post": {
+        "tags": [
+          "overlays"
+        ],
+        "summary": "Replace an overlay instance's token",
+        "description": "Minimum role: owner. The old token stops working at once; open overlay sockets close with 4003.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Overlay instance id"
+            },
+            "required": true,
+            "description": "Overlay instance id",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The instance and its new token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverlayToken"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/events": {
+      "get": {
+        "tags": [
+          "events"
+        ],
+        "summary": "Recent events for the event inspector",
+        "description": "Minimum role: owner. Newest first. Includes events that are not exposed to the panel.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Only events with a lower id"
+            },
+            "required": false,
+            "description": "Only events with a lower id",
+            "name": "before",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (code validation or auth_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/logs": {
+      "get": {
+        "tags": [
+          "logs"
+        ],
+        "summary": "Recent log entries for the log view",
+        "description": "Minimum role: owner. Newest first. Kept in memory: the last 2000 entries at the configured level. Live entries arrive through the WebSocket `logs` stream.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Only this plugin; \"core\" for entries without a plugin"
+            },
+            "required": false,
+            "description": "Only this plugin; \"core\" for entries without a plugin",
+            "name": "plugin",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "debug",
+                "info",
+                "warn",
+                "error"
+              ],
+              "description": "Minimum level"
+            },
+            "required": false,
+            "description": "Minimum level",
+            "name": "level",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "description": "Only entries with a lower id"
+            },
+            "required": false,
+            "description": "Only entries with a lower id",
+            "name": "before",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 200
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of log entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (code validation or auth_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role or failed Origin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {}
+}

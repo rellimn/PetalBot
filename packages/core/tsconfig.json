@@ -1,0 +1,4 @@
+{
+  "extends": "@petalbot/tooling/tsconfig/node.json",
+  "include": ["src", "test", "scripts", "dev", "vitest.config.ts"]
+}

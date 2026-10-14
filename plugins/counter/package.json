@@ -1,0 +1,35 @@
+{
+  "name": "@petalbot-plugin/counter",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "petalbot": {
+    "id": "counter",
+    "apiVersion": 1,
+    "entries": {
+      "server": "dist/server/server.js",
+      "panel": "dist/panel/panel.js",
+      "overlays": {
+        "display": "dist/overlays/display/display.js"
+      }
+    }
+  },
+  "dependencies": {
+    "@petalbot/sdk": "workspace:*",
+    "@petalbot/ui-sdk": "workspace:*",
+    "lucide-react": "^1.55.0",
+    "react": "^19.3.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@petalbot/testing": "workspace:*",
+    "@petalbot/tooling": "workspace:*",
+    "@types/react": "^19.3.0",
+    "vite": "^8.3.4"
+  }
+}

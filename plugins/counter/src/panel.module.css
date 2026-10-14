@@ -1,0 +1,18 @@
+.value {
+  color: var(--pb-accent-text);
+  font-family: var(--pb-font-family-display);
+  font-size: var(--pb-font-size-xl);
+  font-weight: var(--pb-font-weight-bold);
+}
+
+.actions {
+  display: flex;
+  gap: var(--pb-space-2);
+}
+
+.widget {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pb-space-3);
+}

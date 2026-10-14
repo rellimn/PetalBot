@@ -1,0 +1,28 @@
+.standalone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: var(--pb-space-4);
+}
+
+.box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pb-space-3);
+  width: min(420px, 100%);
+  padding: var(--pb-space-5);
+  border-radius: var(--pb-radius-lg);
+  background: var(--pb-surface-2);
+  text-align: center;
+}
+
+.logo {
+  margin: 0;
+  background: var(--pb-brand);
+  background-clip: text;
+  color: transparent;
+  font-family: var(--pb-font-family-display);
+  font-size: var(--pb-font-size-xl);
+  font-weight: var(--pb-font-weight-bold);
+}

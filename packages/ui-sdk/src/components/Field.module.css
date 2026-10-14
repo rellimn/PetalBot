@@ -1,0 +1,22 @@
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pb-space-1);
+  min-width: 0;
+}
+
+.label {
+  font-weight: var(--pb-font-weight-medium);
+}
+
+.help {
+  margin: 0;
+  color: var(--pb-text-muted);
+  font-size: var(--pb-font-size-sm);
+}
+
+.error {
+  margin: 0;
+  color: var(--pb-danger);
+  font-size: var(--pb-font-size-sm);
+}

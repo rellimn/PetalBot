@@ -1,0 +1,27 @@
+/*
+ * The page is an OBS browser source or the panel's preview iframe: transparent, no scrollbars.
+ * color-scheme: normal (after the theme's `dark`) keeps the iframe transparent: browsers paint an
+ * opaque canvas when an iframe's color scheme differs from the embedding element's.
+ */
+:root {
+  color-scheme: normal;
+  background: transparent;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: transparent;
+  color: var(--pb-text);
+  font-family: var(--pb-font-family);
+  font-size: var(--pb-font-size);
+  line-height: var(--pb-line-height);
+  -webkit-font-smoothing: antialiased;
+}

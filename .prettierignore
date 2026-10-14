@@ -1,0 +1,7 @@
+pnpm-lock.yaml
+dist
+coverage
+.idea
+docs/superpowers
+.superpowers
+docs/api/*.json

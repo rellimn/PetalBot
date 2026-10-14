@@ -1,0 +1,934 @@
+{
+  "asyncapi": "3.0.0",
+  "info": {
+    "title": "PetalBot WebSocket API",
+    "version": "1.0.0",
+    "description": "The WebSocket API of one PetalBot instance at `/ws`\n\n- Upgrade: `Origin` must equal the public URL. The panel authenticates with the\n  `petalbot_session` cookie, an overlay with `?t=<token>`, and the panel's live preview with\n  `?preview=<instanceId>` plus an owner session. Refusals are plain HTTP 401/403/404.\n- Every client message has an `id`; the server answers each with one `reply` carrying either\n  `result` or `error: { code, message }`.\n- Error codes: invalid_message, forbidden, not_found, validation, unavailable, timeout, busy, internal.\n- Limits: frames ≤ 65536 bytes, ≤ 32 concurrent RPCs per socket, ping every 30 s.\n- Close codes: 1001 shutdown, 1007 malformed data, 1011 send failure, 1013 too slow, 4001 session ended, 4003 overlay token revoked or rotated.\n- Clients reconnect with exponential backoff (capped at 10 s) and subscribe again.\n  Subscribing to an event of a stopped plugin answers `unavailable`; subscribe again\n  when `plugin.state` reports it running."
+  },
+  "defaultContentType": "application/json",
+  "servers": {
+    "petalbot": {
+      "host": "bot.example.com",
+      "protocol": "wss",
+      "pathname": "/ws",
+      "description": "Same origin as the panel (the configured public URL)."
+    }
+  },
+  "channels": {
+    "ws": {
+      "address": "/ws",
+      "messages": {
+        "subscribe": {
+          "$ref": "#/components/messages/subscribe"
+        },
+        "unsubscribe": {
+          "$ref": "#/components/messages/unsubscribe"
+        },
+        "rpc": {
+          "$ref": "#/components/messages/rpc"
+        },
+        "inspect": {
+          "$ref": "#/components/messages/inspect"
+        },
+        "logs": {
+          "$ref": "#/components/messages/logs"
+        },
+        "logEntry": {
+          "$ref": "#/components/messages/logEntry"
+        },
+        "hello": {
+          "$ref": "#/components/messages/hello"
+        },
+        "reply": {
+          "$ref": "#/components/messages/reply"
+        },
+        "event": {
+          "$ref": "#/components/messages/event"
+        },
+        "inspectEvent": {
+          "$ref": "#/components/messages/inspectEvent"
+        },
+        "pluginState": {
+          "$ref": "#/components/messages/pluginState"
+        },
+        "pluginRemoved": {
+          "$ref": "#/components/messages/pluginRemoved"
+        },
+        "overlayConfig": {
+          "$ref": "#/components/messages/overlayConfig"
+        }
+      }
+    }
+  },
+  "operations": {
+    "receiveSubscribe": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/ws"
+      },
+      "messages": [
+        {
+          "$ref": "#/channels/ws/messages/subscribe"
+        }
+      ]
+    },
+    "receiveUnsubscribe": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/ws"
+      },
+      "messages": [
+        {
+          "$ref": "#/channels/ws/messages/unsubscribe"
+        }
+      ]
+    },
+    "receiveRpc": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/ws"
+      },
+      "messages": [
+        {
+          "$ref": "#/channels/ws/messages/rpc"
+        }
+      ]
+    },
+    "receiveInspect": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/ws"
+      },
+      "messages": [
+        {
+          "$ref": "#/channels/ws/messages/inspect"
+        }
+      ]
+    },
+    "receiveLogs": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/ws"
+      },
+      "messages": [
+        {
+          "$ref": "#/channels/ws/messages/logs"
+        }
+      ]
+    },
+    "sendLogEntry": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/ws"
+      },
+      "messages": [
+        {
+          "$ref": "#/channels/ws/messages/logEntry"
+        }
+      ]
+    },
+    "sendHello": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/ws"
+      },
+      "messages": [
+        {
+          "$ref": "#/channels/ws/messages/hello"
+        }
+      ]
+    },
+    "sendReply": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/ws"
+      },
+      "messages": [
+        {
+          "$ref": "#/channels/ws/messages/reply"
+        }
+      ]
+    },
+    "sendEvent": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/ws"
+      },
+      "messages": [
+        {
+          "$ref": "#/channels/ws/messages/event"
+        }
+      ]
+    },
+    "sendInspectEvent": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/ws"
+      },
+      "messages": [
+        {
+          "$ref": "#/channels/ws/messages/inspectEvent"
+        }
+      ]
+    },
+    "sendPluginState": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/ws"
+      },
+      "messages": [
+        {
+          "$ref": "#/channels/ws/messages/pluginState"
+        }
+      ]
+    },
+    "sendPluginRemoved": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/ws"
+      },
+      "messages": [
+        {
+          "$ref": "#/channels/ws/messages/pluginRemoved"
+        }
+      ]
+    },
+    "sendOverlayConfig": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/ws"
+      },
+      "messages": [
+        {
+          "$ref": "#/channels/ws/messages/overlayConfig"
+        }
+      ]
+    }
+  },
+  "components": {
+    "messages": {
+      "subscribe": {
+        "name": "subscribe",
+        "summary": "Subscribe to an exposed event. Overlays only to events their declaration lists.",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "subscribe"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "description": "Chosen by the client; echoed in the reply"
+            },
+            "event": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "description": "Qualified event name, e.g. \"chat.message\""
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "event"
+          ]
+        }
+      },
+      "unsubscribe": {
+        "name": "unsubscribe",
+        "summary": "Stop receiving an event.",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "unsubscribe"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "description": "Chosen by the client; echoed in the reply"
+            },
+            "event": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "event"
+          ]
+        }
+      },
+      "rpc": {
+        "name": "rpc",
+        "summary": "Call an exposed RPC. The panel needs the role in expose.panel.",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "rpc"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "description": "Chosen by the client; echoed in the reply"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "description": "Qualified RPC name, e.g. \"quotes.list\""
+            },
+            "input": {}
+          },
+          "required": [
+            "type",
+            "id",
+            "name",
+            "input"
+          ]
+        }
+      },
+      "inspect": {
+        "name": "inspect",
+        "summary": "Owners only: receive every event as inspect.event (enabled: false stops).",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "inspect"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "description": "Chosen by the client; echoed in the reply"
+            },
+            "enabled": {
+              "description": "false stops the stream; default true",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ]
+        }
+      },
+      "logs": {
+        "name": "logs",
+        "summary": "Owners only: receive every new log entry as log.entry (enabled: false stops).",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "logs"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "description": "Chosen by the client; echoed in the reply"
+            },
+            "enabled": {
+              "description": "false stops the stream; default true",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ]
+        }
+      },
+      "logEntry": {
+        "name": "logEntry",
+        "summary": "A new log entry, for owners who sent logs.",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "log.entry"
+            },
+            "entry": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Increasing; pass it as `before` to page back"
+                },
+                "time": {
+                  "type": "number",
+                  "description": "Unix time in milliseconds"
+                },
+                "level": {
+                  "type": "string",
+                  "enum": [
+                    "debug",
+                    "info",
+                    "warn",
+                    "error"
+                  ]
+                },
+                "plugin": {
+                  "description": "Absent for core entries",
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "data": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
+                }
+              },
+              "required": [
+                "id",
+                "time",
+                "level",
+                "message",
+                "data"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "entry"
+          ]
+        }
+      },
+      "hello": {
+        "name": "hello",
+        "summary": "First message after the upgrade: who the server thinks the client is. Overlays also get their config and bundle.",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "hello"
+            },
+            "identity": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "panel"
+                    },
+                    "user": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "role": {
+                          "type": "string",
+                          "enum": [
+                            "owner",
+                            "mod"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "role"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "user"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "overlay"
+                    },
+                    "instanceId": {
+                      "type": "string"
+                    },
+                    "pluginId": {
+                      "type": "string"
+                    },
+                    "overlay": {
+                      "type": "string"
+                    },
+                    "preview": {
+                      "type": "boolean",
+                      "description": "The panel's live preview (an owner session instead of the token)"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "instanceId",
+                    "pluginId",
+                    "overlay",
+                    "preview"
+                  ]
+                }
+              ]
+            },
+            "overlay": {
+              "description": "Overlays only",
+              "type": "object",
+              "properties": {
+                "config": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {},
+                  "description": "The instance config as stored; the overlay applies its schema's defaults"
+                },
+                "bundle": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "hash": {
+                          "type": "string"
+                        },
+                        "entry": {
+                          "type": "string",
+                          "description": "URL of the overlay bundle"
+                        },
+                        "styles": {
+                          "readOnly": true,
+                          "description": "URLs of its stylesheets",
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "hash",
+                        "entry",
+                        "styles"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Null while the plugin is not running or has no bundle for this overlay"
+                }
+              },
+              "required": [
+                "config",
+                "bundle"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "identity"
+          ]
+        }
+      },
+      "reply": {
+        "name": "reply",
+        "summary": "The answer to one client message.",
+        "payload": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "reply"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "result": {}
+              },
+              "required": [
+                "type",
+                "id",
+                "result"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "reply"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "error": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ]
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "error"
+              ]
+            }
+          ]
+        }
+      },
+      "event": {
+        "name": "event",
+        "summary": "An event the client subscribed to.",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "event"
+            },
+            "envelope": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "ULID, sortable by creation time"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Qualified event name, e.g. \"chat.message\""
+                },
+                "payload": {},
+                "source": {
+                  "type": "string",
+                  "description": "Id of the emitting plugin"
+                },
+                "timestamp": {
+                  "type": "number"
+                },
+                "causedBy": {
+                  "description": "Envelope id of the event whose handler emitted this",
+                  "type": "string"
+                },
+                "depth": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "payload",
+                "source",
+                "timestamp",
+                "depth"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "envelope"
+          ]
+        }
+      },
+      "inspectEvent": {
+        "name": "inspectEvent",
+        "summary": "Any event, for owners who sent inspect.",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "inspect.event"
+            },
+            "envelope": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "ULID, sortable by creation time"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Qualified event name, e.g. \"chat.message\""
+                },
+                "payload": {},
+                "source": {
+                  "type": "string",
+                  "description": "Id of the emitting plugin"
+                },
+                "timestamp": {
+                  "type": "number"
+                },
+                "causedBy": {
+                  "description": "Envelope id of the event whose handler emitted this",
+                  "type": "string"
+                },
+                "depth": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "payload",
+                "source",
+                "timestamp",
+                "depth"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "envelope"
+          ]
+        }
+      },
+      "pluginState": {
+        "name": "pluginState",
+        "summary": "A plugin changed state. The panel gets the full PluginInfo; an overlay gets { id, state, bundle } of its own plugin (a new bundle hash means new code).",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "plugin.state"
+            },
+            "plugin": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "string"
+                    },
+                    "dir": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "disabled",
+                        "starting",
+                        "running",
+                        "stopping",
+                        "failed"
+                      ]
+                    },
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "degraded": {
+                      "type": "boolean"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "dependencies": {
+                      "readOnly": true,
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "optionalDependencies": {
+                      "readOnly": true,
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "hasPanel": {
+                      "type": "boolean",
+                      "description": "The manifest declares a panel entry"
+                    },
+                    "hasSettings": {
+                      "description": "Absent until the core has loaded the plugin definition",
+                      "type": "boolean"
+                    },
+                    "panel": {
+                      "description": "Present while the plugin runs with a readable panel bundle",
+                      "type": "object",
+                      "properties": {
+                        "entry": {
+                          "type": "string",
+                          "description": "URL of the panel bundle"
+                        },
+                        "styles": {
+                          "readOnly": true,
+                          "description": "URLs of its stylesheets",
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "entry",
+                        "styles"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "version",
+                    "dir",
+                    "state",
+                    "enabled",
+                    "degraded",
+                    "dependencies",
+                    "optionalDependencies",
+                    "hasPanel"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "disabled",
+                        "starting",
+                        "running",
+                        "stopping",
+                        "failed"
+                      ]
+                    },
+                    "bundle": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "hash": {
+                              "type": "string"
+                            },
+                            "entry": {
+                              "type": "string",
+                              "description": "URL of the overlay bundle"
+                            },
+                            "styles": {
+                              "readOnly": true,
+                              "description": "URLs of its stylesheets",
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "hash",
+                            "entry",
+                            "styles"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "A new hash means new code: reload"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                    "bundle"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "plugin"
+          ]
+        }
+      },
+      "pluginRemoved": {
+        "name": "pluginRemoved",
+        "summary": "Panel only: a plugin folder disappeared after a rescan.",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "plugin.removed"
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ]
+        }
+      },
+      "overlayConfig": {
+        "name": "overlayConfig",
+        "summary": "Overlays only: the instance config changed (PATCH /api/overlays/{id}).",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "overlay.config"
+            },
+            "config": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {},
+              "description": "The instance config as stored; the overlay applies its schema's defaults"
+            }
+          },
+          "required": [
+            "type",
+            "config"
+          ]
+        }
+      }
+    }
+  }
+}

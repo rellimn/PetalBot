@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+*.db
+*.db-*
+.env
+.env.*
+.DS_Store
+.vscode/*
+npm-debug.log*
+packages/core/dev/secret-key

@@ -1,0 +1,13 @@
+.content {
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: var(--pb-space-2);
+  min-width: 220px;
+  max-width: calc(100vw - 32px);
+  padding: var(--pb-space-3);
+  border: 1px solid var(--pb-border);
+  border-radius: var(--pb-radius-md);
+  background: var(--pb-surface-2);
+  color: var(--pb-text);
+}

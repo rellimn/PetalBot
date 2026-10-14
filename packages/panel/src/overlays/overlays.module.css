@@ -1,0 +1,159 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pb-space-4);
+  min-width: 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--pb-space-3);
+}
+
+.header h1 {
+  flex: 1;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(200px, 280px) minmax(0, 1fr);
+  gap: var(--pb-space-4);
+  align-items: start;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pb-space-3);
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pb-row-gap);
+}
+
+.groupLabel {
+  margin: 0;
+  color: var(--pb-text-muted);
+  font-size: var(--pb-font-size-sm);
+  font-weight: var(--pb-font-weight-medium);
+}
+
+.items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pb-row-gap);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pb-space-2);
+  padding: var(--pb-row-pad-y) var(--pb-row-pad-x);
+  border-radius: var(--pb-radius-md);
+  background: var(--pb-surface-2);
+  color: var(--pb-text);
+  text-decoration: none;
+}
+
+.item:hover,
+.item[aria-current='page'] {
+  background: var(--pb-surface-3);
+}
+
+.item[aria-current='page'] {
+  box-shadow: inset 3px 0 0 var(--pb-accent);
+  font-weight: var(--pb-font-weight-bold);
+}
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pb-space-4);
+  min-width: 0;
+}
+
+.meta {
+  margin: 0 0 var(--pb-space-3);
+  color: var(--pb-text-muted);
+  font-size: var(--pb-font-size-sm);
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pb-space-4);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.muted {
+  margin: 0;
+  color: var(--pb-text-muted);
+}
+
+.preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pb-space-3);
+  margin-top: var(--pb-space-4);
+}
+
+.previewBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--pb-space-3);
+}
+
+.previewBar h3 {
+  flex: 1;
+  margin: 0;
+  font-size: var(--pb-font-size);
+}
+
+/* The backdrops stand for the stream picture behind the overlay, not for the panel theme:
+   fixed neutral colors on purpose (ruling in the M4b plan). */
+.stage {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--pb-radius-md);
+}
+
+.stage[data-backdrop='checker'] {
+  background-color: #cfcfcf;
+  background-image: conic-gradient(#f2f2f2 25%, #cfcfcf 0 50%, #f2f2f2 0 75%, #cfcfcf 0);
+  background-size: 24px 24px;
+}
+
+.stage[data-backdrop='dark'] {
+  background: #111111;
+}
+
+.stage[data-backdrop='light'] {
+  background: #f4f4f4;
+}
+
+.frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border: 0;
+  background: transparent;
+  transform-origin: 0 0;
+}
+
+@media (max-width: 720px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}

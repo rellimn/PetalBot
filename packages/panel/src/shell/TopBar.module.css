@@ -1,0 +1,75 @@
+.topbar {
+  grid-area: top;
+  display: flex;
+  align-items: center;
+  gap: var(--pb-space-3);
+  padding: 0 var(--pb-space-4);
+  background: var(--pb-surface-1);
+}
+
+.logo {
+  background: var(--pb-brand);
+  background-clip: text;
+  color: transparent;
+  font-size: var(--pb-font-size-lg);
+  font-weight: var(--pb-font-weight-bold);
+  text-decoration: none;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.menuButton {
+  display: none;
+}
+
+.health {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--pb-radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+
+.health:hover {
+  background: var(--pb-surface-3);
+}
+
+.user {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pb-space-1);
+  padding: var(--pb-space-1) var(--pb-space-2);
+  border: none;
+  border-radius: var(--pb-radius-sm);
+  background: transparent;
+  color: var(--pb-text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.user:hover {
+  background: var(--pb-surface-3);
+  color: var(--pb-text);
+}
+
+.popoverText {
+  margin: 0;
+}
+
+.problems {
+  margin: 0;
+  padding-left: var(--pb-space-4);
+}
+
+@media (max-width: 720px) {
+  .menuButton {
+    display: inline-flex;
+  }
+}

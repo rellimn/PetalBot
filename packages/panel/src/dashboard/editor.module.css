@@ -1,0 +1,116 @@
+.editBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--pb-space-2);
+  padding: var(--pb-space-2) var(--pb-space-3);
+  border: 1px dashed var(--pb-accent);
+  border-radius: var(--pb-radius-lg);
+  background: var(--pb-surface-1);
+}
+
+.name {
+  min-width: 220px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.column {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--pb-space-3);
+  min-width: 0;
+  min-height: 120px;
+  padding: var(--pb-space-2);
+  border: 1px dashed var(--pb-border);
+  border-radius: var(--pb-radius-lg);
+}
+
+.column[data-drop-target] {
+  border-color: var(--pb-accent);
+}
+
+.columnHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--pb-text-muted);
+  font-size: var(--pb-font-size-sm);
+}
+
+.widget {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pb-space-1);
+  border-radius: var(--pb-radius-lg);
+  outline: 1px solid var(--pb-border);
+}
+
+.widgetHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--pb-space-1);
+  padding: var(--pb-space-1) var(--pb-space-2) 0;
+  cursor: grab;
+}
+
+.widgetHeader span {
+  flex: 1;
+  font-weight: var(--pb-font-weight-bold);
+}
+
+.widgetBody {
+  opacity: 0.5;
+}
+
+.hint {
+  margin: auto;
+  color: var(--pb-text-muted);
+}
+
+.resizer {
+  position: absolute;
+  top: 0;
+  right: calc(-1 * var(--pb-space-3));
+  bottom: 0;
+  width: var(--pb-space-3);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.resizer:hover,
+.resizer:focus-visible {
+  background: linear-gradient(var(--pb-accent), var(--pb-accent)) center / 2px 100% no-repeat;
+  outline: none;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pb-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: var(--pb-space-3);
+  padding: var(--pb-row-pad-y) var(--pb-row-pad-x);
+  border-radius: var(--pb-radius-md);
+  background: var(--pb-surface-3);
+}
+
+.item div {
+  flex: 1;
+}
+
+.item p {
+  margin: 0;
+  color: var(--pb-text-muted);
+  font-size: var(--pb-font-size-sm);
+}

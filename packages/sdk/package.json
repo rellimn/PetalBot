@@ -1,0 +1,27 @@
+{
+  "name": "@petalbot/sdk",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "drizzle-orm": "^0.45.4",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@petalbot/tooling": "workspace:*",
+    "zod": "^4.6.5",
+    "drizzle-orm": "^0.45.4",
+    "@types/better-sqlite3": "^9.6.0"
+  },
+  "peerDependenciesMeta": {
+    "drizzle-orm": {
+      "optional": true
+    }
+  }
+}

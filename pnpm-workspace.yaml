@@ -1,0 +1,8 @@
+packages:
+  - packages/*
+  - plugins/*
+allowBuilds:
+  unrs-resolver: false
+  better-sqlite3: true
+minimumReleaseAgeExclude:
+  - prettier@3.9.10

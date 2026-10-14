@@ -1,0 +1,36 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--pb-bg);
+  color: var(--pb-text);
+  font-family: var(--pb-font-family);
+  font-size: var(--pb-font-size);
+  line-height: var(--pb-line-height);
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--pb-accent-text);
+}
+
+h1 {
+  margin: 0;
+  font-size: var(--pb-font-size-lg);
+  font-weight: var(--pb-font-weight-bold);
+}
+
+:focus-visible {
+  outline: 2px solid var(--pb-focus-ring);
+  outline-offset: 2px;
+}
