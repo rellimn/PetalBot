@@ -25,7 +25,7 @@ A plugin is a workspace package. `package.json` names the plugin and its depende
 ```
 
 The entries come from the build: `vite build` writes them to `dist/build.json` (see
-"Building"). A plugin without that file is listed in Admin › Plugins as "Not built". Every
+"Building"). A plugin without that file is listed in Admin > Plugins as "Not built". Every
 overlay the contract declares needs a built `src/overlays/<name>.tsx`, or the plugin doesn't
 start.
 
@@ -185,7 +185,7 @@ export default defineConfig({ plugins: petalbotPlugin() });
 Browser bundles are built with the React Compiler. With `dev: true` in the config, the core
 reloads a running plugin when its `dist/build.json` changes (and restarts it if it failed), and
 picks up new plugin folders once they're built: plugins with no stored enabled/disabled choice
-start enabled. Without `dev`, new plugins start disabled; use Admin › Plugins › Reload after a
+start enabled. Without `dev`, new plugins start disabled; use Admin > Plugins > Reload after a
 rebuild.
 
 The core reads the bundle folders into memory when the plugin starts and serves only that copy,
@@ -309,7 +309,7 @@ export default defineOverlay(alertsContract, 'box', { component: AlertBox });
 - **Page:** the overlay is mounted on a transparent full-viewport page. Draw your own
   background, if any; use `--pb-*` tokens and CSS Modules as in the panel. While the plugin is
   stopped the page is empty; after a reload with new code it reloads itself.
-- **Instances:** owners create instances in Admin › Overlays: each has a name, its own config
+- **Instances:** owners create instances in Admin > Overlays: each has a name, its own config
   and its own URL `/overlay/<plugin>/<overlay>/<instance>?t=<token>` for OBS. The token is shown
   once; rotating or revoking it disconnects open pages. The panel shows a live preview.
 - **Public bundle:** overlay bundles are served without login (OBS has no session); do not put
