@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import type { ContractShape, ProviderSlotDef } from './contract.ts';
+import type { ContractShape, ProviderSlotDef, SecretDefs } from './contract.ts';
 import type { EventEnvelope } from './envelope.ts';
 import type { HttpApi } from './http.ts';
 import type { Logger } from './logger.ts';
@@ -63,6 +63,11 @@ export type SettingsOf<C extends ContractShape> = C extends {
 }
   ? S
   : z.ZodObject<NoMembers>;
+
+/** The secret declarations of a contract (none when it declares none). */
+export type SecretsOf<C extends ContractShape> = C extends { secrets: infer S extends SecretDefs }
+  ? S
+  : NoMembers;
 
 type SchemaOf<D, K extends string> = D extends Record<K, infer S extends z.ZodType> ? S : never;
 type SlotOf<D> = D extends ProviderSlotDef ? D : never;
@@ -135,7 +140,8 @@ export interface PluginContext<
   /** Typed from the contract's `settings`. */
   readonly settings: SettingsApi<SettingsOf<Own>>;
   readonly kv: KvApi<Kv>;
-  readonly secrets: SecretsApi;
+  /** Typed from the contract's `secrets`. */
+  readonly secrets: SecretsApi<SecretsOf<Own>>;
   readonly schedule: ScheduleApi;
   /** HTTP routes under `/api/p/<pluginId>/...` */
   readonly http: HttpApi;

@@ -14,6 +14,9 @@ export const HTTP_METHODS: readonly HttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 const PATH_PATTERN = /^\/[A-Za-z0-9\-._~:/*]*$/;
 
+/** A path `ctx.http.route` accepts: starts with `/`, URL-safe characters only. */
+export const isRoutePath = (path: string): boolean => PATH_PATTERN.test(path);
+
 /** What the HTTP layer knows about a request before it reaches a plugin route. */
 export interface RouteRequestAuth {
   readonly user?: PanelUser;
@@ -62,7 +65,7 @@ export class PluginRouteTable {
     options: HttpRouteOptions = {},
   ): () => void {
     if (!isHttpMethod(method)) throw new AccessError(`Unsupported HTTP method "${method}"`);
-    if (!PATH_PATTERN.test(path)) {
+    if (!isRoutePath(path)) {
       throw new AccessError(`Invalid route path "${path}" (must start with "/")`);
     }
     const routes = this.#routes.get(pluginId) ?? [];

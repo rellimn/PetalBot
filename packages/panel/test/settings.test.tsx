@@ -31,6 +31,7 @@ function settingsRoutes(patch: (body: unknown) => unknown) {
   return {
     'GET /api/plugins/quotes/settings': () => ({ values, schema }),
     'PATCH /api/plugins/quotes/settings': ({ body }: { body: unknown }) => patch(body),
+    'GET /api/plugins/quotes/secrets': () => ({ secrets: [] }),
   };
 }
 
@@ -153,7 +154,10 @@ describe('settings page', () => {
     await renderApp({
       path: '/settings/quotes',
       plugins: [pluginInfo('quotes', { hasSettings: false })],
-      routes: { 'GET /api/plugins/quotes/settings': () => ({ values: {}, schema: null }) },
+      routes: {
+        'GET /api/plugins/quotes/settings': () => ({ values: {}, schema: null }),
+        'GET /api/plugins/quotes/secrets': () => ({ secrets: [] }),
+      },
     });
     expect(await screen.findByText('quotes has no settings.')).toBeTruthy();
   });

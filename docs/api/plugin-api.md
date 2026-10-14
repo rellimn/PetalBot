@@ -45,6 +45,10 @@ export const alertsContract = defineContract({
   id: 'alerts',
   version: '1.0.0',
   settings: z.object({ volume: z.number().min(0).max(100).default(50) }),
+  secrets: {
+    apiKey: { userSettable: true, label: 'API key', description: 'From the vendor dashboard' },
+    tokens: { schema: Token, keyed: true }, // internal: one value per key
+  },
   events: { shown: { schema: Alert, expose: ['panel', 'overlay'] } },
   hooks: { beforeShow: { input: Alert, failClosed: false } },
   rpc: {
@@ -65,15 +69,16 @@ export const alertsContract = defineContract({
 });
 ```
 
-| Member      | Meaning                                                                                                                                                                                                                                                                       |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `settings`  | Settings schema, typed everywhere (server `ctx.settings`, custom settings forms, the test harness). Every field needs a default.                                                                                                                                              |
-| `events`    | Fire-and-forget fan-out. Only the owner emits. `expose` makes an event reachable from the panel and/or overlays.                                                                                                                                                              |
-| `hooks`     | Awaited, ordered pipeline that can modify or veto. Only the owner runs it; dependents tap it. Browsers never see hooks.                                                                                                                                                       |
-| `rpc`       | Request/response, validated both ways. `kind: 'query'` marks a read that clients may repeat freely (`useQuery`); without it the RPC is a mutation (`useMutation`). `expose.panel` is the minimum role; `expose.overlay: true` allows overlays.                                |
-| `providers` | Interfaces dependents implement, keyed by a connection id. Every method is optional for implementers.                                                                                                                                                                         |
-| `widgets`   | Every dashboard widget, with an optional per-instance `config`. Titles and components live in `definePanel`.                                                                                                                                                                  |
-| `overlays`  | Each overlay's instance config and the exact events and RPCs it may use. Names must be exposed to `overlay` and come from the own contract or the overlay's `dependencies`. Wrong names are compile errors and also fail at runtime. Overlay names match `^[a-z][a-z0-9-]*$`. |
+| Member      | Meaning                                                                                                                                                                                                                                                                                                      |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `settings`  | Settings schema, typed everywhere (server `ctx.settings`, custom settings forms, the test harness). Every field needs a default.                                                                                                                                                                             |
+| `secrets`   | Credentials, encrypted at rest. `userSettable: true` secrets are plain strings the owner enters in the panel's Secrets card (needs `label`, no `schema`); internal ones default to a string, may declare a JSON-safe `schema`, and `keyed: true` holds one value per key. Names follow the member-name rule. |
+| `events`    | Fire-and-forget fan-out. Only the owner emits. `expose` makes an event reachable from the panel and/or overlays.                                                                                                                                                                                             |
+| `hooks`     | Awaited, ordered pipeline that can modify or veto. Only the owner runs it; dependents tap it. Browsers never see hooks.                                                                                                                                                                                      |
+| `rpc`       | Request/response, validated both ways. `kind: 'query'` marks a read that clients may repeat freely (`useQuery`); without it the RPC is a mutation (`useMutation`). `expose.panel` is the minimum role; `expose.overlay: true` allows overlays.                                                               |
+| `providers` | Interfaces dependents implement, keyed by a connection id. Every method is optional for implementers.                                                                                                                                                                                                        |
+| `widgets`   | Every dashboard widget, with an optional per-instance `config`. Titles and components live in `definePanel`.                                                                                                                                                                                                 |
+| `overlays`  | Each overlay's instance config and the exact events and RPCs it may use. Names must be exposed to `overlay` and come from the own contract or the overlay's `dependencies`. Wrong names are compile errors and also fail at runtime. Overlay names match `^[a-z][a-z0-9-]*$`.                                |
 
 RPCs without `input` take none: `ctx.call('alerts.recent')`. Member names must be unique across
 `events`, `hooks`, `rpc` and `providers`. `choice('<own rpc>')` makes a string field whose valid
@@ -115,24 +120,25 @@ fail with `PluginUnavailableError`. Each implementation gets `(input, { caller, 
 
 ## `ctx` reference
 
-| Member                                                       | Description                                                                                                                                                   |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pluginId`, `log`                                            | The plugin id and a pino child logger tagged with it.                                                                                                         |
-| `on(event, handler)`                                         | Own and (optional) dependency events. Each subscription has its own FIFO queue.                                                                               |
-| `emit(event, payload)`                                       | Own events only. Validated synchronously; an invalid payload throws `ValidationError`.                                                                        |
-| `hook(name, handler, { priority })` / `runHook(name, input)` | Tap a hook / run an own hook. A handler returns the modified input, nothing, or `veto(reason)`.                                                               |
-| `call(rpc, input?, { timeoutMs })`                           | Dependency RPCs (default timeout 5 s); RPCs without input take none. Throws `ValidationError`, `PluginUnavailableError`, `RpcTimeoutError`.                   |
-| `provide(slot, key, impl)` / `providers(slot)`               | Implement a dependency's provider slot / resolve the providers of an own slot.                                                                                |
-| `settings.get()` / `settings.onChange(fn)`                   | Validated settings; the panel edits them.                                                                                                                     |
-| `kv.get/set/delete(key)`                                     | Declared keys only; values must survive JSON. `set(key, undefined)` deletes.                                                                                  |
-| `kv.update(key, updater)`                                    | Atomic read-modify-write: a synchronous `updater(current)` runs in one transaction; `undefined` deletes. A throwing, async or invalid updater writes nothing. |
-| `lock(key, fn)`                                              | Runs `fn` one at a time per key (FIFO); for async read-call-write sections. Waiting calls reject when the plugin stops.                                       |
-| `secrets.get/set/delete(name)`                               | AES-256-GCM at rest; never sent to the panel.                                                                                                                 |
-| `db`                                                         | Drizzle database for plugins that declare `db`. Tables must be prefixed `<pluginId>_`.                                                                        |
-| `schedule.after/every/cron`                                  | Timers that never overlap and are disposed on stop.                                                                                                           |
-| `http.route(method, path, handler, options)`                 | See below.                                                                                                                                                    |
-| `isRunning(id)`                                              | For optional dependencies.                                                                                                                                    |
-| `onDispose(fn)`                                              | Custom teardown. Everything registered through `ctx` is disposed automatically, in reverse order.                                                             |
+| Member                                                                                    | Description                                                                                                                                                                                                           |
+| ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pluginId`, `log`                                                                         | The plugin id and a pino child logger tagged with it.                                                                                                                                                                 |
+| `on(event, handler)`                                                                      | Own and (optional) dependency events. Each subscription has its own FIFO queue.                                                                                                                                       |
+| `emit(event, payload)`                                                                    | Own events only. Validated synchronously; an invalid payload throws `ValidationError`.                                                                                                                                |
+| `hook(name, handler, { priority })` / `runHook(name, input)`                              | Tap a hook / run an own hook. A handler returns the modified input, nothing, or `veto(reason)`.                                                                                                                       |
+| `call(rpc, input?, { timeoutMs })`                                                        | Dependency RPCs (default timeout 5 s); RPCs without input take none. Throws `ValidationError`, `PluginUnavailableError`, `RpcTimeoutError`.                                                                           |
+| `provide(slot, key, impl)` / `providers(slot)`                                            | Implement a dependency's provider slot / resolve the providers of an own slot.                                                                                                                                        |
+| `settings.get()` / `settings.onChange(fn)`                                                | Validated settings; the panel edits them.                                                                                                                                                                             |
+| `kv.get/set/delete(key)`                                                                  | Declared keys only; values must survive JSON. `set(key, undefined)` deletes.                                                                                                                                          |
+| `kv.update(key, updater)`                                                                 | Atomic read-modify-write: a synchronous `updater(current)` runs in one transaction; `undefined` deletes. A throwing, async or invalid updater writes nothing.                                                         |
+| `lock(key, fn)`                                                                           | Runs `fn` one at a time per key (FIFO); for async read-call-write sections. Waiting calls reject when the plugin stops.                                                                                               |
+| `secrets.get/set/delete(name, [key])`, `secrets.keys(name)`, `secrets.onChange(name, fn)` | Declared secrets only. Keyed secrets take a key (1-128 characters) after the name. `onChange` runs after every write (panel or plugin, deletes too) and gets the key for keyed secrets. Values never reach the panel. |
+| `db`                                                                                      | Drizzle database for plugins that declare `db`. Tables must be prefixed `<pluginId>_`.                                                                                                                                |
+| `schedule.after/every/cron`                                                               | Timers that never overlap and are disposed on stop.                                                                                                                                                                   |
+| `http.route(method, path, handler, options)`                                              | See below.                                                                                                                                                                                                            |
+| `http.url(path)`                                                                          | The absolute public URL of an own route path, e.g. for OAuth redirects: `ctx.http.url('/auth/callback')`.                                                                                                             |
+| `isRunning(id)`                                                                           | For optional dependencies.                                                                                                                                                                                            |
+| `onDispose(fn)`                                                                           | Custom teardown. Everything registered through `ctx` is disposed automatically, in reverse order.                                                                                                                     |
 
 After the plugin stops, every `ctx` method throws `PluginUnavailableError`.
 
@@ -161,6 +167,24 @@ ctx.http.route(
 - A handler that throws, or returns no `Response`, answers 500 `internal` and counts toward the plugin's `degraded` flag.
 - While the plugin is stopped, its routes answer 404 `unavailable`.
 - Request bodies are limited to 1 MiB.
+
+## Secrets
+
+```ts
+setup(ctx) {
+  ctx.secrets.onChange('apiKey', () => restartClient());
+  const key = await ctx.secrets.get('apiKey'); // string | undefined
+  await ctx.secrets.set('tokens', userId, { accessToken, refreshToken }); // validated by its schema
+  for (const id of await ctx.secrets.keys('tokens')) { /* ... */ }
+}
+```
+
+- The owner sets user-settable secrets on the plugin's settings page (Secrets card): a password field, Replace and Clear. Surrounding whitespace is trimmed; an empty value deletes. The panel only ever sees whether a value is set.
+- Plugin code never handles secret values for the panel; the core renders the card, also below a custom settings form.
+- The owner-only HTTP API is `GET /api/plugins/{id}/secrets` and `PUT|DELETE /api/plugins/{id}/secrets/{name}` (see `openapi.json`).
+- "Delete data" removes every secret of the plugin.
+- `onChange` also fires for the plugin's own writes, and `set`/`delete` wait for the listeners. A listener that writes the secret it listens to calls itself again: guard it, or listen only to the secrets the owner sets (e.g. restart a client on `clientSecret`, not on `tokens`).
+- Schema secrets follow the KV rule: values must survive JSON unchanged, so leave out optional fields instead of setting them to `undefined`.
 
 ## Building: `petalbotPlugin()`
 
@@ -335,6 +359,21 @@ the schema's output type on both ends.
 - If the browser receives something that does not match its contract (e.g. a dependency changed
   incompatibly), the event is dropped and the call rejects with `ClientError` code `validation`.
 
+## Rate limiting
+
+Platform plugins limit their own outbound calls (spec §6.6):
+
+```ts
+const limiter = createRateLimiter({ limit: 20, windowMs: 30_000, maxQueue: 20, maxWaitMs: 10_000 });
+ctx.onDispose(() => limiter.dispose());
+const result = await limiter.schedule(() => api.send(text));
+if (!result.ok) return result; // { ok: false, reason: 'rate-limited', message }
+```
+
+- Sliding window over task starts; the budget is `max(1, floor(limit * safetyFactor))` (default 0.9).
+- Waiting tasks start in FIFO order. A full queue, or a start more than `maxWaitMs` away, is rejected at once; `rate-limited` always means "not attempted". A throwing task rejects `schedule` with its error.
+- `setLimit(limit)` resizes (e.g. the bot became a moderator), `pause(ms)` starts nothing for a while (e.g. the platform reported a hit) and rejects waiting tasks that would expire, `stats()` returns `{ queued, remaining, limit }`, `dispose()` rejects everything waiting.
+
 ## Errors and results
 
 - Infrastructure failures throw `PetalBotError` subclasses: `ValidationError`, `PluginUnavailableError`, `RpcTimeoutError`, `AccessError`, `ContractVersionError`.
@@ -343,17 +382,19 @@ the schema's output type on both ends.
 
 ## Defaults and limits
 
-| What                  | Value                                                                                  |
-| --------------------- | -------------------------------------------------------------------------------------- |
-| `setup` timeout       | 10 s                                                                                   |
-| RPC timeout           | 5 s                                                                                    |
-| Hook handler timeout  | 2 s (fail-open unless `failClosed`)                                                    |
-| Event causation depth | 16                                                                                     |
-| Degraded              | 10 failures within 60 s, or any uncaught error                                         |
-| WebSocket             | 64 KiB frames, 32 concurrent RPCs per socket                                           |
-| Browser bundles       | ≤ 1000 files per bundle folder, ≤ 20 MiB per plugin; served only while the plugin runs |
-| Log ring              | last 2000 entries at the configured level                                              |
-| Dashboard             | 1–3 columns, ≤ 20 widgets per column, ≤ 20 presets per user                            |
+| What                         | Value                                                                                  |
+| ---------------------------- | -------------------------------------------------------------------------------------- |
+| `setup` timeout              | 10 s                                                                                   |
+| RPC timeout                  | 5 s                                                                                    |
+| Hook handler timeout         | 2 s (fail-open unless `failClosed`)                                                    |
+| Event causation depth        | 16                                                                                     |
+| Degraded                     | 10 failures within 60 s, or any uncaught error                                         |
+| WebSocket                    | 64 KiB frames, 32 concurrent RPCs per socket                                           |
+| Browser bundles              | ≤ 1000 files per bundle folder, ≤ 20 MiB per plugin; served only while the plugin runs |
+| Log ring                     | last 2000 entries at the configured level                                              |
+| Dashboard                    | 1–3 columns, ≤ 20 widgets per column, ≤ 20 presets per user                            |
+| Secret keys                  | 1-128 characters                                                                       |
+| Secret values from the panel | <= 16384 characters                                                                    |
 
 ## Testing
 
@@ -369,6 +410,21 @@ await harness.call('alerts.recent'); // no input
 await harness.updateSettings({ volume: 20 });
 await harness.stop();
 ```
+
+```ts
+const harness = await createTestHarness(chatPlugin, {
+  secrets: { apiKey: 'k', tokens: { '42': { accessToken: 'a' } } },
+  providers: {
+    'chat.platform': { 'twitch:test': { send: async ({ text }) => ({ messageId: text }) } },
+  },
+  publicUrl: 'https://bot.example.com',
+});
+await harness.setSecret('apiKey', 'k-2'); // fires onChange
+const remove = harness.addProvider('chat.platform', 'twitch:other', fake);
+const handle = harness.provider('chat.platform', 'twitch:main'); // implementer under test
+```
+
+`secrets` seeds stored values and `setSecret(name, [key,] value)` writes one as the panel would, firing `onChange`. `providers` fills the plugin's own slots with fakes before it starts; `addProvider` adds one mid-test. For a plugin that implements a dependency's slot, `provider(slot, key)` returns the handle the slot owner would see. Fake providers and `harness.call` come from the same harness plugin.
 
 `createTestHarness` (from `@petalbot/testing`) runs the plugin in a real Kernel on an in-memory database, with its dependencies replaced by typed fakes.
 

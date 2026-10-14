@@ -22,3 +22,4 @@ export type {
 } from './type-utils.ts';
 export * from './codecs.ts';
 export * from './choice.ts';
+export * from './rate-limiter.ts';

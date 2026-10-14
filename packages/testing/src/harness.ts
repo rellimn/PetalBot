@@ -8,17 +8,28 @@ import type {
   AnyPluginDefinition,
   ContractShape,
   DbSchema,
+  Disposer,
   EventDefsOf,
   EventEnvelope,
+  ImplementableSlots,
+  KeyedSecretNames,
   KvSchema,
   Logger,
   MergeMaps,
   NoMembers,
+  OwnedSlots,
   PluginDefinition,
+  ProviderHandle,
+  ProviderImpl,
+  ProviderSlotDef,
+  ProviderView,
   RpcDefsOf,
   RpcImpls,
   RpcInputArgs,
+  SecretSchemaOf,
+  SecretsOf,
   SettingsOf,
+  SingleSecretNames,
 } from '@petalbot/sdk';
 
 type SchemaOf<D, K extends string> = D extends Record<K, infer S extends z.ZodType> ? S : never;
@@ -27,6 +38,30 @@ type DependencyEvents<
   Opt extends readonly ContractShape[],
 > = MergeMaps<EventDefsOf<Deps[number] | Opt[number]>>;
 type OwnRpc<Own extends ContractShape> = MergeMaps<RpcDefsOf<Own>>;
+type SlotOf<D> = D extends ProviderSlotDef ? D : never;
+type OwnSlot<Own extends ContractShape, N> = SlotOf<OwnedSlots<Own>[N & keyof OwnedSlots<Own>]>;
+type DependencySlot<
+  Deps extends readonly ContractShape[],
+  Opt extends readonly ContractShape[],
+  N,
+> = SlotOf<ImplementableSlots<Deps, Opt>[N & keyof ImplementableSlots<Deps, Opt>]>;
+type SecretValue<Own extends ContractShape, N> = z.input<
+  SecretSchemaOf<SecretsOf<Own>[N & keyof SecretsOf<Own>]>
+>;
+
+/** Per own provider slot: fake providers by key, registered before the plugin starts. */
+export type FakeProviders<Own extends ContractShape> = {
+  readonly [N in keyof OwnedSlots<Own> & string]?: Readonly<
+    Record<string, ProviderImpl<OwnSlot<Own, N>>>
+  >;
+};
+
+/** Values to start with per declared secret; keyed secrets take `{ [key]: value }`. */
+export type HarnessSecrets<Own extends ContractShape> = {
+  readonly [N in SingleSecretNames<SecretsOf<Own>>]?: SecretValue<Own, N>;
+} & {
+  readonly [N in KeyedSecretNames<SecretsOf<Own>>]?: Readonly<Record<string, SecretValue<Own, N>>>;
+};
 
 /** Per dependency id: fake implementations of (some of) its RPCs. */
 export type FakeDependencies<C extends ContractShape> = {
@@ -42,6 +77,12 @@ export interface HarnessOptions<
   readonly fakes?: FakeDependencies<Deps[number] | Opt[number]>;
   /** Stored settings to start with (validated against the contract's settings on start). */
   readonly settings?: z.input<SettingsOf<Own>>;
+  /** Stored secrets to start with (validated against the contract's declarations). */
+  readonly secrets?: HarnessSecrets<Own>;
+  /** Fake providers for the plugin's own slots, registered before it starts. */
+  readonly providers?: FakeProviders<Own>;
+  /** Base of `ctx.http.url`. Default `http://localhost:8080`. */
+  readonly publicUrl?: string;
   readonly logger?: Logger;
   /**
    * The plugin folder, for `db` migrations. Default: the nearest folder above the running test
@@ -71,18 +112,44 @@ export interface TestHarness<
   ): Promise<z.output<SchemaOf<OwnRpc<Own>[N], 'output'>>>;
   /** Merges `patch` into the stored settings, as the panel does, and notifies the plugin. */
   updateSettings(patch: Partial<z.input<SettingsOf<Own>>>): Promise<z.output<SettingsOf<Own>>>;
+  /**
+   * Stores a secret and calls the plugin's `onChange` listeners. User-settable values are written
+   * as the panel writes them: trimmed, and deleted when empty.
+   */
+  setSecret<N extends SingleSecretNames<SecretsOf<Own>>>(
+    name: N,
+    value: SecretValue<Own, N>,
+  ): Promise<void>;
+  setSecret<N extends KeyedSecretNames<SecretsOf<Own>>>(
+    name: N,
+    key: string,
+    value: SecretValue<Own, N>,
+  ): Promise<void>;
+  /** Registers a fake provider for an own slot; the disposer removes it. */
+  addProvider<N extends keyof OwnedSlots<Own> & string>(
+    slot: N,
+    key: string,
+    impl: ProviderImpl<OwnSlot<Own, N>>,
+  ): Disposer;
+  /** The handle the slot owner sees for the plugin's provider `key` in a dependency's slot. */
+  provider<N extends keyof ImplementableSlots<Deps, Opt> & string>(
+    slot: N,
+    key: string,
+  ): ProviderHandle<DependencySlot<Deps, Opt, N>> | undefined;
   /** Resolves when all queued events have been handled. */
   idle(): Promise<void>;
   /** Stops the caller, the plugin and the fakes. */
   stop(): Promise<void>;
 }
 
-interface Emitter {
+interface FakeContext {
   emit(name: string, payload: unknown): void;
+  providers(slot: string): ProviderView<ProviderSlotDef>;
 }
 
-interface Caller {
+interface CallerContext {
   call(name: string, input: unknown): Promise<unknown>;
+  provide(slot: string, key: string, impl: object): Disposer;
 }
 
 const silentLogger: Logger = {
@@ -97,7 +164,8 @@ const CALLER_ID = 'petalbot-test-caller';
 
 /**
  * Runs `definition` in a real Kernel on an in-memory database, with its dependencies replaced by
- * fakes. Use `vi.useFakeTimers()` to control `ctx.schedule`.
+ * fakes and its own provider slots optionally filled with fake providers. Use
+ * `vi.useFakeTimers()` to control `ctx.schedule`.
  */
 export async function createTestHarness<
   Own extends ContractShape,
@@ -112,7 +180,11 @@ export async function createTestHarness<
   const storage = createStorage(openDatabase(':memory:'), randomBytes(32));
   const pluginId = definition.contract.id;
   if (options.settings) storage.settings.write(pluginId, options.settings);
-  const kernel = new Kernel({ logger: options.logger ?? silentLogger, storage });
+  const kernel = new Kernel({
+    logger: options.logger ?? silentLogger,
+    storage,
+    ...(options.publicUrl === undefined ? {} : { publicUrl: options.publicUrl }),
+  });
   const events: EventEnvelope[] = [];
   kernel.tap((event) => {
     events.push(event);
@@ -121,7 +193,7 @@ export async function createTestHarness<
   const fakes = (options.fakes ?? {}) as Readonly<
     Record<string, { readonly rpc?: Readonly<Record<string, unknown>> } | undefined>
   >;
-  const emitters = new Map<string, Emitter>();
+  const fakeContexts = new Map<string, FakeContext>();
   const started: string[] = [];
   const optional = (definition.optionalDependencies ?? []).filter(
     (contract) => fakes[contract.id] !== undefined,
@@ -129,11 +201,42 @@ export async function createTestHarness<
   for (const contract of [...(definition.dependencies ?? []), ...optional]) {
     await kernel.start(
       fakeDefinition(contract, fakes[contract.id]?.rpc ?? {}, (ctx) => {
-        emitters.set(contract.id, ctx);
+        fakeContexts.set(contract.id, ctx);
       }),
     );
     started.push(contract.id);
   }
+
+  // The caller is an optional dependent of the plugin, started first: it registers the fake
+  // providers before the plugin's setup runs, and calls the plugin's RPCs from the same plugin.
+  const caller: { ctx?: CallerContext } = {};
+  const fakeProviders = Object.entries(
+    (options.providers ?? {}) as Readonly<Record<string, Readonly<Record<string, object>>>>,
+  );
+  const callerDefinition: AnyPluginDefinition = {
+    contract: { id: CALLER_ID, version: '0.0.0' },
+    optionalDependencies: [definition.contract],
+    setup: (ctx: CallerContext) => {
+      caller.ctx = ctx;
+      for (const [slot, impls] of fakeProviders) {
+        for (const [key, impl] of Object.entries(impls)) ctx.provide(slot, key, impl);
+      }
+    },
+  };
+  await kernel.start(callerDefinition);
+  started.push(CALLER_ID);
+
+  const secrets = kernel.secrets(definition);
+  for (const [name, seed] of Object.entries(options.secrets ?? {})) {
+    if (secrets.def(name).keyed === true) {
+      for (const [key, value] of Object.entries(seed as Readonly<Record<string, unknown>>)) {
+        await secrets.set(name, key, value);
+      }
+    } else {
+      await secrets.set(name, undefined, seed);
+    }
+  }
+
   const dir = options.dir ?? pluginDirOfRunningTest();
   if (definition.db !== undefined && dir === undefined) {
     throw new Error(
@@ -143,36 +246,42 @@ export async function createTestHarness<
   await kernel.start(definition, dir === undefined ? {} : { dir });
   started.push(pluginId);
 
-  const caller: { ctx?: Caller } = {};
-  const callerDefinition: AnyPluginDefinition = {
-    contract: { id: CALLER_ID, version: '0.0.0' },
-    dependencies: [definition.contract],
-    setup: (ctx: Caller) => {
-      caller.ctx = ctx;
-    },
+  const ownerContext = (name: string): FakeContext => {
+    const owner = name.slice(0, name.indexOf('.'));
+    const context = fakeContexts.get(owner);
+    if (!context) {
+      throw new Error(
+        `Dependency "${owner}" is not running in this harness (optional dependencies need an entry in fakes)`,
+      );
+    }
+    return context;
   };
-  await kernel.start(callerDefinition);
-  started.push(CALLER_ID);
+  const callerContext = (): CallerContext => {
+    if (!caller.ctx) throw new Error('The harness caller is not running');
+    return caller.ctx;
+  };
 
   return {
     kernel,
     storage,
     events,
     emit(name, payload) {
-      const owner = name.slice(0, name.indexOf('.'));
-      const emitter = emitters.get(owner);
-      if (!emitter) {
-        throw new Error(
-          `Dependency "${owner}" is not running in this harness (optional dependencies need an entry in fakes)`,
-        );
-      }
-      emitter.emit(name, payload);
+      ownerContext(name).emit(name, payload);
     },
     call(name, ...args) {
       if (!caller.ctx) return Promise.reject(new Error('The harness caller is not running'));
       return caller.ctx.call(name, args[0]) as Promise<never>;
     },
     updateSettings: (patch) => kernel.updateSettings(definition, patch) as Promise<never>,
+    async setSecret(name: string, ...args: readonly unknown[]) {
+      const def = secrets.def(name);
+      if (def.keyed === true) await secrets.set(name, args[0], args[1]);
+      // User-settable secrets go through the panel's path: trimmed, deleted when empty.
+      else if (def.userSettable === true) await secrets.setUserValue(name, String(args[0]));
+      else await secrets.set(name, undefined, args[0]);
+    },
+    addProvider: (slot, key, impl) => callerContext().provide(slot, key, impl),
+    provider: (slot, key) => ownerContext(slot).providers(slot).get(key),
     idle: () => kernel.idle(),
     async stop() {
       for (const id of [...started].reverse()) await kernel.stop(id);
@@ -183,7 +292,7 @@ export async function createTestHarness<
 function fakeDefinition(
   contract: ContractShape,
   fakes: Readonly<Record<string, unknown>>,
-  onSetup: (ctx: Emitter) => void,
+  onSetup: (ctx: FakeContext) => void,
 ): AnyPluginDefinition {
   const rpc = Object.fromEntries(
     Object.keys(contract.rpc ?? {}).map((member) => {
@@ -199,7 +308,7 @@ function fakeDefinition(
   );
   return {
     contract,
-    setup: (ctx: Emitter) => {
+    setup: (ctx: FakeContext) => {
       onSetup(ctx);
       return { rpc };
     },

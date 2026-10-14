@@ -57,7 +57,11 @@ export function createServices(options: ServicesOptions): Services {
   const { config, logger } = options;
   const clock = options.now ? { now: options.now } : {};
   const sqlite = openDatabase(config.database);
-  const kernel = new Kernel({ logger, storage: createStorage(sqlite, config.secretKey) });
+  const kernel = new Kernel({
+    logger,
+    storage: createStorage(sqlite, config.secretKey),
+    publicUrl: config.publicUrl,
+  });
   const manager = new PluginManager({
     kernel,
     sqlite,

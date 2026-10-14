@@ -782,7 +782,7 @@
                       "description": "The build has a panel entry"
                     },
                     "hasSettings": {
-                      "description": "Absent until the core has loaded the plugin definition",
+                      "description": "Has settings or user-settable secrets; absent until the core has loaded the plugin definition",
                       "type": "boolean"
                     },
                     "panel": {

@@ -198,3 +198,65 @@ describe('defineContract choice() fields', () => {
     );
   });
 });
+
+describe('defineContract secrets', () => {
+  it('accepts user-settable, internal and keyed secrets', () => {
+    const contract = defineContract({
+      id: 'twitch',
+      version: '1.0.0',
+      secrets: {
+        clientSecret: { userSettable: true, label: 'Client secret', description: 'From the app' },
+        tokens: { schema: z.object({ accessToken: z.string() }), keyed: true },
+        plain: {},
+      },
+    });
+    expect(Object.keys(contract.secrets)).toEqual(['clientSecret', 'tokens', 'plain']);
+  });
+
+  it.each(['client/secret', 'client.secret', '1st', ''])('rejects secret name %j', (name) => {
+    expect(() =>
+      defineContract({ id: 'twitch', version: '1.0.0', secrets: { [name]: {} } }),
+    ).toThrow(`Invalid secret name "${name}" in contract "twitch"`);
+  });
+
+  it('requires a label on user-settable secrets', () => {
+    const shape: ContractShape = {
+      id: 'twitch',
+      version: '1.0.0',
+      secrets: { key: { userSettable: true, label: '  ' } },
+    };
+    expect(() => defineContract(shape)).toThrow(
+      'Secret "key" of contract "twitch" is user-settable and needs a label',
+    );
+  });
+
+  it('allows no schema and no keyed on user-settable secrets', () => {
+    const withSchema = {
+      id: 'twitch',
+      version: '1.0.0',
+      secrets: { key: { userSettable: true, label: 'Key', schema: z.string() } },
+    } as unknown as ContractShape;
+    expect(() => defineContract(withSchema)).toThrow(
+      'Secret "key" of contract "twitch" is user-settable, so it is a plain string without a schema',
+    );
+    const keyed = {
+      id: 'twitch',
+      version: '1.0.0',
+      secrets: { key: { userSettable: true, label: 'Key', keyed: true } },
+    } as unknown as ContractShape;
+    expect(() => defineContract(keyed)).toThrow(
+      'Secret "key" of contract "twitch": keyed user-settable secrets are not supported yet',
+    );
+  });
+
+  it('requires keyed to be a boolean on internal secrets', () => {
+    const shape = {
+      id: 'twitch',
+      version: '1.0.0',
+      secrets: { tokens: { keyed: 'yes' } },
+    } as unknown as ContractShape;
+    expect(() => defineContract(shape)).toThrow(
+      'Secret "tokens" of contract "twitch": keyed must be true or false',
+    );
+  });
+});

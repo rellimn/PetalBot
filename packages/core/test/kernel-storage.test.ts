@@ -325,7 +325,7 @@ describe('Kernel kv and secrets', () => {
   it('stores secrets encrypted', async () => {
     const { storage, kernel } = setup();
     await kernel.start(
-      definePlugin(counterContract, {
+      definePlugin(defineContract({ ...counterContract, secrets: { token: {} } }), {
         async setup(ctx) {
           await ctx.secrets.set('token', 'abc123');
           expect(await ctx.secrets.get('token')).toBe('abc123');
@@ -459,6 +459,7 @@ describe('Kernel lifecycle safety', () => {
     const notesWithSettings = defineContract({
       ...notesContract,
       settings: z.object({ a: z.number().default(1) }),
+      secrets: { s: {} },
     });
     const plugin = definePlugin(notesWithSettings, {
       db: { schema: { notes }, migrations: 'migrations' },

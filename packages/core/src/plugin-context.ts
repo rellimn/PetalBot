@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from 'node:util';
 import {
   AccessError,
   PluginUnavailableError,
@@ -12,11 +11,13 @@ import {
   type ScheduleApi,
 } from '@petalbot/sdk';
 import type { DisposerScope } from './disposer-scope.ts';
+import { isJsonSafe } from './json-safe.ts';
 import { KeyedLock } from './keyed-lock.ts';
 import type { EventBus, RawEventHandler } from './event-bus.ts';
 import type { HookRunner, RawHookHandler } from './hook-runner.ts';
 import { ownerOf, splitName } from './names.ts';
-import type { PluginRouteTable } from './plugin-routes.ts';
+import { isRoutePath, type PluginRouteTable } from './plugin-routes.ts';
+import type { PluginSecrets, SecretListener } from './plugin-secrets.ts';
 import type { ProviderRegistry, RawProviderImpl } from './provider-registry.ts';
 import type { RpcRouter } from './rpc-router.ts';
 import type { KernelStorage } from './storage/storage.ts';
@@ -35,9 +36,15 @@ export interface ContextServices {
   readonly rpc: RpcRouter;
   readonly providers: ProviderRegistry;
   readonly storage: KernelStorage;
+  /** The plugin's declared secrets. */
+  readonly secrets: PluginSecrets;
+  /** Registers an `onChange` listener for secret `name`; the returned function removes it. */
+  subscribeSecret(name: string, listener: SecretListener): () => void;
   readonly settings: PluginSettings;
   readonly schedule: ScheduleApi;
   readonly routes: PluginRouteTable;
+  /** The instance's public URL, for `http.url`. */
+  readonly publicUrl: string;
   /** The plugin's drizzle database, if it declares `db`. */
   readonly db: unknown;
   isRunning(pluginId: string): boolean;
@@ -55,9 +62,11 @@ export interface RuntimeContext {
     update(key: string, updater: (current: unknown) => unknown): Promise<unknown>;
   };
   readonly secrets: {
-    get(name: string): Promise<string | undefined>;
-    set(name: string, value: string): Promise<void>;
-    delete(name: string): Promise<void>;
+    get(name: string, key?: string): Promise<unknown>;
+    set(name: string, ...args: readonly unknown[]): Promise<void>;
+    delete(name: string, key?: string): Promise<void>;
+    keys(name: string): Promise<string[]>;
+    onChange(name: string, listener: SecretListener): () => void;
   };
   readonly schedule: ScheduleApi;
   readonly http: {
@@ -67,6 +76,7 @@ export interface RuntimeContext {
       handler: HttpHandler,
       options?: HttpRouteOptions,
     ): () => void;
+    url(path: string): string;
   };
   readonly db: unknown;
   on(name: string, handler: RawEventHandler): () => void;
@@ -88,17 +98,6 @@ export interface CreateContextOptions {
   readonly services: ContextServices;
   readonly log: Logger;
 }
-
-/** True if `value` comes back unchanged from a JSON round trip. */
-const isJsonSafe = (value: unknown): boolean => {
-  try {
-    // Typed as string, but returns undefined for functions, symbols and undefined.
-    const json = JSON.stringify(value) as string | undefined;
-    return json !== undefined && isDeepStrictEqual(JSON.parse(json), value);
-  } catch {
-    return false;
-  }
-};
 
 const isPromiseLike = (value: unknown): value is PromiseLike<unknown> =>
   (typeof value === 'object' || typeof value === 'function') &&
@@ -220,21 +219,31 @@ export function createPluginContext(options: CreateContextOptions): RuntimeConte
         }),
     },
     secrets: {
-      get: (name) =>
+      get: (name, key) =>
         attempt(() => {
           assertLive();
-          return services.storage.secrets.get(pluginId, name);
+          return services.secrets.get(name, key);
         }),
-      set: (name, value) =>
+      async set(name, ...args) {
+        assertLive();
+        // Keyed secrets take (key, value), single ones (value).
+        const keyed = services.secrets.def(name).keyed === true;
+        await services.secrets.set(name, keyed ? args[0] : undefined, keyed ? args[1] : args[0]);
+      },
+      async delete(name, key) {
+        assertLive();
+        await services.secrets.delete(name, key);
+      },
+      keys: (name) =>
         attempt(() => {
           assertLive();
-          services.storage.secrets.set(pluginId, name, value);
+          return services.secrets.keys(name);
         }),
-      delete: (name) =>
-        attempt(() => {
-          assertLive();
-          services.storage.secrets.delete(pluginId, name);
-        }),
+      onChange(name, listener) {
+        assertLive();
+        services.secrets.def(name);
+        return track(services.subscribeSecret(name, listener));
+      },
     },
     schedule: {
       after(ms, task) {
@@ -254,6 +263,13 @@ export function createPluginContext(options: CreateContextOptions): RuntimeConte
       route(method, path, handler, routeOptions) {
         assertLive();
         return track(services.routes.register(pluginId, method, path, handler, routeOptions));
+      },
+      url(path) {
+        assertLive();
+        if (!isRoutePath(path)) {
+          throw new AccessError(`Invalid route path "${path}" (must start with "/")`);
+        }
+        return new URL(`/api/p/${pluginId}${path}`, services.publicUrl).href;
       },
     },
     get db() {

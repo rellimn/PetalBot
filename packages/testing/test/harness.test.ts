@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
-import { defineContract, definePlugin } from '@petalbot/sdk';
+import { Result, defineContract, definePlugin, fail, ok } from '@petalbot/sdk';
 import { createTestHarness } from '../src/harness.ts';
 
 const pointsContract = defineContract({
@@ -125,5 +125,153 @@ describe('createTestHarness', () => {
       void harness.call('points.getBalance', { userId: 'u' });
     };
     expect(check).toBeTypeOf('function');
+  });
+});
+
+const vaultContract = defineContract({
+  id: 'vault',
+  version: '1.0.0',
+  secrets: {
+    apiKey: { userSettable: true, label: 'API key' },
+    tokens: { schema: z.object({ accessToken: z.string() }), keyed: true },
+  },
+  rpc: {
+    read: {
+      kind: 'query',
+      output: z.object({ apiKey: z.string().nullable(), tokens: z.array(z.string()) }),
+    },
+    changes: { kind: 'query', output: z.array(z.string()) },
+    callback: { kind: 'query', output: z.string() },
+  },
+});
+
+const vault = definePlugin(vaultContract, {
+  setup(ctx) {
+    const changes: string[] = [];
+    ctx.secrets.onChange('apiKey', () => {
+      changes.push('apiKey');
+    });
+    ctx.secrets.onChange('tokens', (key) => {
+      changes.push(`tokens:${key}`);
+    });
+    return {
+      rpc: {
+        read: async () => ({
+          apiKey: (await ctx.secrets.get('apiKey')) ?? null,
+          tokens: await ctx.secrets.keys('tokens'),
+        }),
+        changes: () => changes,
+        callback: () => ctx.http.url('/auth/callback'),
+      },
+    };
+  },
+});
+
+describe('createTestHarness secrets and URLs', () => {
+  it('seeds secrets and fires onChange on setSecret', async () => {
+    const harness = await createTestHarness(vault, {
+      secrets: { apiKey: 'k-1', tokens: { u1: { accessToken: 'a' } } },
+    });
+    expect(await harness.call('vault.read')).toEqual({ apiKey: 'k-1', tokens: ['u1'] });
+    await harness.setSecret('apiKey', 'k-2');
+    await harness.setSecret('tokens', 'u2', { accessToken: 'b' });
+    expect(await harness.call('vault.read')).toEqual({ apiKey: 'k-2', tokens: ['u1', 'u2'] });
+    expect(await harness.call('vault.changes')).toEqual(['apiKey', 'tokens:u2']);
+    await harness.stop();
+  });
+
+  it('trims user-settable values and deletes on empty, as the panel does', async () => {
+    const harness = await createTestHarness(vault, { secrets: { apiKey: 'k-1' } });
+    await harness.setSecret('apiKey', '  k-3\n');
+    expect(await harness.call('vault.read')).toEqual({ apiKey: 'k-3', tokens: [] });
+    await harness.setSecret('apiKey', ' ');
+    expect(await harness.call('vault.read')).toEqual({ apiKey: null, tokens: [] });
+    await harness.stop();
+  });
+
+  it('uses the given public URL for ctx.http.url', async () => {
+    const harness = await createTestHarness(vault, { publicUrl: 'https://bot.test' });
+    expect(await harness.call('vault.callback')).toBe('https://bot.test/api/p/vault/auth/callback');
+    await harness.stop();
+  });
+});
+
+const sinkContract = defineContract({
+  id: 'sink',
+  version: '1.0.0',
+  providers: {
+    target: {
+      write: { input: z.object({ text: z.string() }), output: z.object({ id: z.string() }) },
+    },
+  },
+  rpc: {
+    keys: { kind: 'query', output: z.array(z.string()) },
+    keysAtStart: { kind: 'query', output: z.array(z.string()) },
+    write: {
+      input: z.object({ key: z.string(), text: z.string() }),
+      output: Result(z.object({ id: z.string() })),
+    },
+  },
+});
+
+const sink = definePlugin(sinkContract, {
+  setup(ctx) {
+    const atStart = ctx.providers('sink.target').keys();
+    return {
+      rpc: {
+        keys: () => ctx.providers('sink.target').keys(),
+        keysAtStart: () => atStart,
+        write: async ({ key, text }) => {
+          const provider = ctx.providers('sink.target').get(key);
+          if (!provider) return fail('not-found', `No ${key}`);
+          return ok(await provider.call('write', { text }));
+        },
+      },
+    };
+  },
+});
+
+describe('createTestHarness provider fakes', () => {
+  it('registers fake providers before the slot owner starts', async () => {
+    const harness = await createTestHarness(sink, {
+      providers: {
+        'sink.target': { 'fake:a': { write: ({ text }) => Promise.resolve({ id: `a-${text}` }) } },
+      },
+    });
+    expect(await harness.call('sink.keysAtStart')).toEqual(['fake:a']);
+    expect(await harness.call('sink.write', { key: 'fake:a', text: 'hi' })).toEqual({
+      ok: true,
+      id: 'a-hi',
+    });
+    await harness.stop();
+  });
+
+  it('adds and removes providers mid-test', async () => {
+    const harness = await createTestHarness(sink);
+    const remove = harness.addProvider('sink.target', 'fake:b', {
+      write: () => Promise.resolve({ id: 'b' }),
+    });
+    expect(await harness.call('sink.keys')).toEqual(['fake:b']);
+    remove();
+    expect(await harness.call('sink.keys')).toEqual([]);
+    await harness.stop();
+  });
+
+  it("returns the handle an implementer's slot owner would see", async () => {
+    const writer = definePlugin(defineContract({ id: 'writer', version: '1.0.0' }), {
+      dependencies: [sinkContract],
+      setup(ctx) {
+        ctx.provide('sink.target', 'writer:main', {
+          write: ({ text }) => Promise.resolve({ id: text.toUpperCase() }),
+        });
+      },
+    });
+    const harness = await createTestHarness(writer);
+    const handle = harness.provider('sink.target', 'writer:main');
+    expect(handle?.pluginId).toBe('writer');
+    expect(handle?.methods).toEqual(['write']);
+    expect(await handle?.call('write', { text: 'hi' })).toEqual({ id: 'HI' });
+    expect(harness.provider('sink.target', 'nope')).toBeUndefined();
+    await harness.stop();
   });
 });

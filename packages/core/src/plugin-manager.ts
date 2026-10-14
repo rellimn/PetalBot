@@ -13,6 +13,7 @@ import { loadDefinition } from './loader/load-definition.ts';
 import { readPluginBundles, type BundleSnapshot, type PluginBundles } from './loader/bundles.ts';
 import { errorMessage } from './names.ts';
 import { runInPlugin } from './plugin-scope.ts';
+import { hasUserSecrets, type SecretStatus } from './plugin-secrets.ts';
 import type { Sqlite } from './storage/database.ts';
 import { PluginStateStore } from './storage/plugin-state-store.ts';
 
@@ -43,7 +44,7 @@ export interface PluginInfo {
   readonly optionalDependencies: readonly string[];
   /** The build has a panel entry. */
   readonly hasPanel: boolean;
-  /** Known once the core has loaded the plugin's definition (running, or read for its settings). */
+  /** Settings or user-settable secrets. Known once the core has loaded the plugin's definition. */
   readonly hasSettings?: boolean;
   /** The panel bundle, while the plugin runs and its bundle could be read. */
   readonly panel?: PanelBundleInfo;
@@ -224,6 +225,30 @@ export class PluginManager {
         values: this.#kernel.readSettings(definition),
         schema: definition.contract.settings,
       };
+    });
+  }
+
+  /** The user-settable secrets (never their values); loads the definition if not running. */
+  secrets(pluginId: string): Promise<SecretStatus[]> {
+    return this.#serialize(async () => {
+      const definition = await this.#definition(pluginId, this.#require(pluginId));
+      return this.#kernel.secrets(definition).status();
+    });
+  }
+
+  /** A panel write. `undefined` when the plugin declares no user-settable secret `name`. */
+  setSecret(pluginId: string, name: string, value: string): Promise<SecretStatus | undefined> {
+    return this.#serialize(async () => {
+      const definition = await this.#definition(pluginId, this.#require(pluginId));
+      return this.#kernel.secrets(definition).setUserValue(name, value);
+    });
+  }
+
+  /** A panel delete. `undefined` when the plugin declares no user-settable secret `name`. */
+  deleteSecret(pluginId: string, name: string): Promise<SecretStatus | undefined> {
+    return this.#serialize(async () => {
+      const definition = await this.#definition(pluginId, this.#require(pluginId));
+      return this.#kernel.secrets(definition).deleteUserValue(name);
     });
   }
 
@@ -546,7 +571,12 @@ export class PluginManager {
       dependencies: Object.keys(plugin.manifest.dependencies),
       optionalDependencies: Object.keys(plugin.manifest.optionalDependencies),
       hasPanel: plugin.entries.panel !== undefined,
-      ...(definition ? { hasSettings: definition.contract.settings !== undefined } : {}),
+      ...(definition
+        ? {
+            hasSettings:
+              definition.contract.settings !== undefined || hasUserSecrets(definition.contract),
+          }
+        : {}),
       ...(bundle
         ? {
             panel: {

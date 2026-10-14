@@ -8,6 +8,7 @@ import {
   type EventDef,
   type EventEnvelope,
   type Logger,
+  type MaybePromise,
   type RpcClient,
   type RpcDef,
 } from '@petalbot/sdk';
@@ -20,6 +21,7 @@ import { errorMessage } from './names.ts';
 import { createPluginContext, type SettingsListener } from './plugin-context.ts';
 import { PluginHealth, type HealthListener, type PluginHealthOptions } from './plugin-health.ts';
 import { PluginRouteTable } from './plugin-routes.ts';
+import { PluginSecrets, type SecretListener } from './plugin-secrets.ts';
 import { currentPlugin, runInPlugin } from './plugin-scope.ts';
 import { ProviderRegistry } from './provider-registry.ts';
 import { RpcRouter, type RawRpcHandler } from './rpc-router.ts';
@@ -44,6 +46,8 @@ export interface KernelOptions {
   readonly hookTimeoutMs?: number;
   readonly rpcTimeoutMs?: number;
   readonly maxEventDepth?: number;
+  /** The instance's public URL; `ctx.http.url` builds on it. Default `http://localhost:8080`. */
+  readonly publicUrl?: string;
 }
 
 interface RunningPlugin {
@@ -66,6 +70,7 @@ export class Kernel {
   readonly #setupTimeoutMs: number;
   readonly #disposeTimeoutMs: number;
   readonly #listenerTimeoutMs: number;
+  readonly #publicUrl: string;
   readonly #health: PluginHealth;
   readonly #contracts = new ContractRegistry();
   readonly #bus: EventBus;
@@ -74,6 +79,8 @@ export class Kernel {
   readonly #providers: ProviderRegistry;
   readonly #running = new Map<string, RunningPlugin>();
   readonly #settings = new Map<string, SettingsState>();
+  /** Per running plugin: secret name -> its `onChange` listeners. */
+  readonly #secretListeners = new Map<string, Map<string, Set<SecretListener>>>();
   readonly routes: PluginRouteTable;
   #loadCounter = 0;
 
@@ -84,6 +91,7 @@ export class Kernel {
     this.#setupTimeoutMs = options.setupTimeoutMs ?? 10_000;
     this.#disposeTimeoutMs = options.disposeTimeoutMs ?? 10_000;
     this.#listenerTimeoutMs = options.listenerTimeoutMs ?? 10_000;
+    this.#publicUrl = options.publicUrl ?? 'http://localhost:8080';
     this.#bus = new EventBus({
       contracts: this.#contracts,
       logger: options.logger,
@@ -168,6 +176,13 @@ export class Kernel {
       scope.add(() => {
         this.#settings.delete(pluginId);
       });
+      const secretListeners = new Map<string, Set<SecretListener>>();
+      this.#secretListeners.set(pluginId, secretListeners);
+      scope.add(() => {
+        if (this.#secretListeners.get(pluginId) === secretListeners) {
+          this.#secretListeners.delete(pluginId);
+        }
+      });
       const ctx = createPluginContext({
         definition,
         loadIndex: this.#loadCounter++,
@@ -179,6 +194,17 @@ export class Kernel {
           rpc: this.#rpc,
           providers: this.#providers,
           storage: this.#storage,
+          secrets: this.secrets(definition),
+          subscribeSecret: (name, listener) => {
+            let listeners = secretListeners.get(name);
+            if (!listeners) {
+              listeners = new Set();
+              secretListeners.set(name, listeners);
+            }
+            const set = listeners;
+            set.add(listener);
+            return once(() => set.delete(listener));
+          },
           settings: {
             current: () => settings.value,
             subscribe: (listener) => {
@@ -194,6 +220,7 @@ export class Kernel {
             },
           }),
           routes: this.routes,
+          publicUrl: this.#publicUrl,
           db,
           isRunning: (id) => this.isRunning(id),
         },
@@ -274,20 +301,7 @@ export class Kernel {
       const previous = state.value;
       state.value = next;
       for (const listener of [...state.listeners]) {
-        try {
-          await withTimeout(
-            Promise.resolve().then(() => runInPlugin(pluginId, () => listener(next, previous))),
-            this.#listenerTimeoutMs,
-            () =>
-              new Error(`settings listener timed out after ${String(this.#listenerTimeoutMs)} ms`),
-          );
-        } catch (error) {
-          this.#logger.error('Settings listener failed', {
-            plugin: pluginId,
-            error: errorMessage(error),
-          });
-          this.#health.record(pluginId, 'handler');
-        }
+        await this.#runListener(pluginId, 'Settings listener', () => listener(next, previous));
       }
     }
     return next;
@@ -303,6 +317,16 @@ export class Kernel {
     this.#storage.settings.delete(pluginId);
     this.#storage.secrets.deleteAll(pluginId);
     return dropped;
+  }
+
+  /** The declared secrets of `definition`'s plugin (works for stopped plugins). */
+  secrets(definition: AnyPluginDefinition): PluginSecrets {
+    const pluginId = definition.contract.id;
+    return new PluginSecrets({
+      store: this.#storage.secrets,
+      contract: definition.contract,
+      notify: (name, key) => this.#notifySecret(pluginId, name, key),
+    });
   }
 
   /** Core-internal tap on every event. */
@@ -336,6 +360,31 @@ export class Kernel {
   /** Stored settings of `definition`, parsed with its schema (works for stopped plugins). */
   readSettings(definition: AnyPluginDefinition): unknown {
     return this.#loadSettings(definition);
+  }
+
+  async #notifySecret(pluginId: string, name: string, key: string | undefined): Promise<void> {
+    const listeners = this.#secretListeners.get(pluginId)?.get(name);
+    for (const listener of [...(listeners ?? [])]) {
+      await this.#runListener(pluginId, 'Secret listener', () => listener(key));
+    }
+  }
+
+  /** Runs a plugin listener in its scope with the listener timeout; failures are logged. */
+  async #runListener(
+    pluginId: string,
+    what: string,
+    call: () => MaybePromise<void>,
+  ): Promise<void> {
+    try {
+      await withTimeout(
+        Promise.resolve().then(() => runInPlugin(pluginId, call)),
+        this.#listenerTimeoutMs,
+        () => new Error(`${what} timed out after ${String(this.#listenerTimeoutMs)} ms`),
+      );
+    } catch (error) {
+      this.#logger.error(`${what} failed`, { plugin: pluginId, error: errorMessage(error) });
+      this.#health.record(pluginId, 'handler');
+    }
   }
 
   #loadSettings(definition: AnyPluginDefinition): unknown {

@@ -31,6 +31,8 @@ describe('API documents', () => {
         '/api/plugins/{id}/enable',
         '/api/plugins/{id}/data',
         '/api/plugins/{id}/settings',
+        '/api/plugins/{id}/secrets',
+        '/api/plugins/{id}/secrets/{name}',
         '/api/overlays',
         '/api/overlays/{id}/rotate',
         '/api/events',

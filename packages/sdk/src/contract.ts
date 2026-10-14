@@ -45,6 +45,34 @@ export interface WidgetDef {
   readonly config?: z.ZodObject;
 }
 
+/**
+ * A secret the owner enters in the panel's Secrets card. It is a plain string and is not validated
+ * beyond that: the platform rejects bad credentials itself.
+ */
+export interface UserSecretDef {
+  readonly userSettable: true;
+  /** Shown in the Secrets card. */
+  readonly label: string;
+  readonly description?: string;
+  readonly schema?: never;
+  /** One value per key (`keyed: choice(rpc)`) is specified but not built for user-settable secrets. */
+  readonly keyed?: never;
+}
+
+/** A secret only the plugin reads and writes, e.g. OAuth tokens. */
+export interface InternalSecretDef {
+  readonly userSettable?: false;
+  /** Default: a plain string. Any JSON-safe schema; the core stores the validated input as JSON. */
+  readonly schema?: z.ZodType;
+  /** One value per key, e.g. one token per account. Keys are 1 to 128 characters. */
+  readonly keyed?: boolean;
+  readonly label?: never;
+  readonly description?: never;
+}
+
+export type SecretDef = UserSecretDef | InternalSecretDef;
+export type SecretDefs = Readonly<Record<string, SecretDef>>;
+
 export type ProviderSlotDef = Readonly<Record<string, ProviderMethodDef>>;
 
 /**
@@ -67,6 +95,8 @@ export interface ContractShape {
   readonly version: string;
   /** Settings schema. Give every field a default so a fresh install can start. */
   readonly settings?: z.ZodObject;
+  /** Credentials, encrypted at rest. Names follow the member-name rule. */
+  readonly secrets?: SecretDefs;
   readonly events?: Readonly<Record<string, EventDef>>;
   readonly hooks?: Readonly<Record<string, HookDef>>;
   readonly rpc?: Readonly<Record<string, RpcDef>>;
@@ -227,10 +257,37 @@ export function checkContract(shape: ContractShape): void {
       );
     }
   }
+  checkSecrets(shape);
   for (const [name, overlay] of Object.entries(shape.overlays ?? {})) {
     checkOverlay(shape, name, overlay);
   }
   checkChoices(shape);
+}
+
+/** Names follow the member-name rule; user-settable secrets are labelled plain strings. */
+function checkSecrets(contract: ContractShape): void {
+  for (const [name, def] of Object.entries<SecretDef>(contract.secrets ?? {})) {
+    if (!MEMBER_PATTERN.test(name)) {
+      throw new Error(`Invalid secret name "${name}" in contract "${contract.id}"`);
+    }
+    // Read as unknown: the checks exist for declarations the types would reject.
+    const raw: Partial<Readonly<Record<'userSettable' | 'label' | 'schema' | 'keyed', unknown>>> =
+      def;
+    const where = `Secret "${name}" of contract "${contract.id}"`;
+    if (raw.userSettable === true) {
+      if (typeof raw.label !== 'string' || raw.label.trim() === '') {
+        throw new Error(`${where} is user-settable and needs a label`);
+      }
+      if (raw.schema !== undefined) {
+        throw new Error(`${where} is user-settable, so it is a plain string without a schema`);
+      }
+      if (raw.keyed !== undefined) {
+        throw new Error(`${where}: keyed user-settable secrets are not supported yet`);
+      }
+    } else if (raw.keyed !== undefined && typeof raw.keyed !== 'boolean') {
+      throw new Error(`${where}: keyed must be true or false`);
+    }
+  }
 }
 
 /** Each `choice()` field must name an own query RPC without input and with `expose.panel`. */

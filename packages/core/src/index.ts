@@ -1,5 +1,11 @@
 export { Kernel, type KernelOptions } from './kernel.ts';
 export type { FailureSource, HealthListener, PluginHealthOptions } from './plugin-health.ts';
+export {
+  MAX_SECRET_KEY_LENGTH,
+  PluginSecrets,
+  type SecretListener,
+  type SecretStatus,
+} from './plugin-secrets.ts';
 export { currentPlugin, runInPlugin } from './plugin-scope.ts';
 export { createUncaughtHandler, installProcessGuards } from './process-guards.ts';
 export { createLogger, type LoggerOptions, type LogLevel, type LogRecord } from './logger.ts';

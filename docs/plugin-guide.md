@@ -193,7 +193,8 @@ The `ctx` you get in `setup`:
 | `ctx.kv.get/set/delete/update`        | Declared keys (`kv: { name: schema }`); values must survive JSON. `update` is an atomic read-modify-write. |
 | `ctx.lock(key, fn)`                   | Run `fn` one at a time per key, for read–await–write sections.                                             |
 | `ctx.db`                              | The plugin's Drizzle database (`db: { schema }`).                                                          |
-| `ctx.secrets`                         | Encrypted values (tokens); never sent to the panel.                                                        |
+| `ctx.secrets`                         | Declared credentials (contract `secrets`), encrypted; user-settable ones are entered on the settings page. |
+| `ctx.http.url(path)`                  | Absolute URL of an own route (OAuth redirect URLs).                                                        |
 | `ctx.schedule.after/every/cron`       | Timers, disposed on stop.                                                                                  |
 | `ctx.http.route(…)`                   | HTTP routes under `/api/p/<id>/` (webhooks, OAuth callbacks).                                              |
 | `ctx.onDispose(fn)`                   | Custom teardown. Everything registered through `ctx` is cleaned up automatically.                          |
@@ -583,7 +584,7 @@ repeated values and lose the cause.
 - **`Result`:** an RPC output that is `{ ok: true, … }` or `{ ok: false, reason, message }`
   (section 4).
 - **RPC:** a validated request-and-response call (section 3).
-- **Secrets:** encrypted per-plugin values such as tokens; never sent to the panel.
+- **Secrets:** encrypted per-plugin values such as tokens; never sent to the panel. Declared in the contract; the owner enters user-settable ones in the Secrets card.
 - **Settings:** plugin-wide options from the contract's schema, edited in the panel (section 6).
 - **Target:** where a platform operation goes: `{ platform }` (its default connection) or
   `{ connection }`.

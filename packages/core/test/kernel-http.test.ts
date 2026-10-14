@@ -99,3 +99,42 @@ describe('Kernel client calls and lookups', () => {
     expect(kernel.isRunning('shelf')).toBe(false);
   });
 });
+
+describe('ctx.http.url', () => {
+  const linksContract = defineContract({ id: 'links', version: '1.0.0' });
+
+  async function urlsOf(kernel: Kernel, paths: readonly string[]): Promise<string[]> {
+    const urls: string[] = [];
+    await kernel.start(
+      definePlugin(linksContract, {
+        setup(ctx) {
+          for (const path of paths) urls.push(ctx.http.url(path));
+        },
+      }),
+    );
+    return urls;
+  }
+
+  it('builds absolute URLs of own routes from the public URL', async () => {
+    const kernel = new Kernel({
+      logger: createMemoryLogger(),
+      publicUrl: 'https://bot.example.com',
+    });
+    expect(await urlsOf(kernel, ['/auth/callback', '/hooks/:id'])).toEqual([
+      'https://bot.example.com/api/p/links/auth/callback',
+      'https://bot.example.com/api/p/links/hooks/:id',
+    ]);
+  });
+
+  it('defaults to http://localhost:8080', async () => {
+    const kernel = new Kernel({ logger: createMemoryLogger() });
+    expect(await urlsOf(kernel, ['/x'])).toEqual(['http://localhost:8080/api/p/links/x']);
+  });
+
+  it('refuses paths that are not route paths', async () => {
+    const kernel = new Kernel({ logger: createMemoryLogger() });
+    await expect(urlsOf(kernel, ['callback'])).rejects.toThrow(
+      'Invalid route path "callback" (must start with "/")',
+    );
+  });
+});

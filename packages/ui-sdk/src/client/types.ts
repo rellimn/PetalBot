@@ -19,6 +19,7 @@ export interface PluginInfo {
   readonly dependencies: readonly string[];
   readonly optionalDependencies: readonly string[];
   readonly hasPanel: boolean;
+  /** Has settings or user-settable secrets; absent until the core has loaded the definition. */
   readonly hasSettings?: boolean;
   readonly panel?: PanelBundleInfo;
 }

@@ -70,6 +70,19 @@ export const settingsValuesBody = z
   .object({ values: z.record(z.string(), z.unknown()) })
   .meta({ id: 'PluginSettingsValues' });
 
+export const pluginSecretBody = z
+  .object({
+    name: z.string(),
+    label: z.string(),
+    description: z.string().optional(),
+    set: z.boolean().describe('A value is stored'),
+  })
+  .meta({ id: 'PluginSecret' });
+
+export const pluginSecretListBody = z
+  .object({ secrets: z.array(pluginSecretBody).readonly() })
+  .meta({ id: 'PluginSecretList' });
+
 export const overlayInstanceBody = z
   .object({
     id: z.string(),

@@ -11,12 +11,13 @@ import {
   usePlugin,
   useToast,
 } from '@petalbot/ui-sdk';
-import { loadSettings, saveSettings, type PluginSettings } from '../app/endpoints.ts';
+import { loadSecrets, loadSettings, saveSettings, type PluginSettings } from '../app/endpoints.ts';
 import { OwnerOnly } from '../app/OwnerOnly.tsx';
 import { errorText } from '../plugins/actions.tsx';
 import { PluginBoundary } from '../plugins/PluginBoundary.tsx';
 import { usePanel } from '../plugins/registry.ts';
 import { SchemaForm } from './SchemaForm.tsx';
+import { SecretsCard, secretsKey } from './SecretsCard.tsx';
 import { fieldPaths, patchOf, setPath, settingsFields, type FormValues } from './schema.ts';
 import styles from './settings.module.css';
 
@@ -40,6 +41,15 @@ function SettingsContent() {
     queryKey: settingsKey(pluginId),
     queryFn: () => loadSettings(api, pluginId),
   });
+  const secrets = useQuery({
+    queryKey: secretsKey(pluginId),
+    queryFn: () => loadSecrets(api, pluginId),
+  });
+  const secretsCard = secrets.isError ? (
+    <Banner tone="danger">Secrets could not be loaded: {errorText(secrets.error)}</Banner>
+  ) : secrets.data !== undefined && secrets.data.length > 0 ? (
+    <SecretsCard pluginId={pluginId} secrets={secrets.data} />
+  ) : null;
 
   const title = `${pluginId.charAt(0).toUpperCase()}${pluginId.slice(1)} settings`;
   let content: ReactNode;
@@ -50,12 +60,16 @@ function SettingsContent() {
       <EmptyState title="Settings could not be loaded">{errorText(query.error)}</EmptyState>
     );
   } else if (query.data.schema === null) {
-    content = <EmptyState title="No settings">{pluginId} has no settings.</EmptyState>;
+    content = secrets.isPending ? (
+      <Spinner label="Loading settings" />
+    ) : (
+      (secretsCard ?? <EmptyState title="No settings">{pluginId} has no settings.</EmptyState>)
+    );
   } else {
     const Custom =
       info?.state === 'running' && panel?.status === 'ready' ? panel.panel.settings : undefined;
     const settings = query.data;
-    content = Custom ? (
+    const form = Custom ? (
       <PluginBoundary pluginId={pluginId} label="Settings">
         <Custom
           values={settings.values}
@@ -69,6 +83,12 @@ function SettingsContent() {
       </PluginBoundary>
     ) : (
       <GeneratedSettings key={pluginId} pluginId={pluginId} settings={settings} />
+    );
+    content = (
+      <>
+        {form}
+        {secretsCard}
+      </>
     );
   }
   return (

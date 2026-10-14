@@ -69,3 +69,14 @@ describe('createStorage', () => {
     expect(storage.secrets.get('quotes', 's')).toBe('3');
   });
 });
+
+describe('SecretStore.names', () => {
+  it('lists the stored names of a plugin, sorted', () => {
+    const store = new SecretStore(openDatabase(':memory:'), randomBytes(32));
+    store.set('twitch', 'tokens/b', 'x');
+    store.set('twitch', 'clientSecret', 'y');
+    store.set('twitch', 'tokens/a', 'z');
+    store.set('other', 'tokens/c', 'w');
+    expect(store.names('twitch')).toEqual(['clientSecret', 'tokens/a', 'tokens/b']);
+  });
+});

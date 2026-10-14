@@ -29,6 +29,7 @@ export class SecretStore {
   readonly #upsert;
   readonly #remove;
   readonly #removeAll;
+  readonly #names;
 
   constructor(sqlite: Sqlite, key: Buffer) {
     this.#key = key;
@@ -44,6 +45,9 @@ export class SecretStore {
       'DELETE FROM petalbot_secrets WHERE plugin_id = ? AND name = ?',
     );
     this.#removeAll = sqlite.prepare<[string]>('DELETE FROM petalbot_secrets WHERE plugin_id = ?');
+    this.#names = sqlite.prepare<[string], { name: string }>(
+      'SELECT name FROM petalbot_secrets WHERE plugin_id = ? ORDER BY name',
+    );
   }
 
   get(pluginId: string, name: string): string | undefined {
@@ -60,6 +64,11 @@ export class SecretStore {
           '(wrong PETALBOT_SECRET_KEY or tampered data)',
       );
     }
+  }
+
+  /** Stored names of a plugin, sorted. Keyed entries appear as `<name>/<key>`. */
+  names(pluginId: string): string[] {
+    return this.#names.all(pluginId).map((row) => row.name);
   }
 
   set(pluginId: string, name: string, value: string): void {

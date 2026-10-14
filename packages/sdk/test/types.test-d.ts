@@ -220,6 +220,7 @@ describe('storage and scheduling', () => {
         prefix: z.string().default('!'),
         cooldownMs: z.number().int().default(3000),
       }),
+      secrets: { token: {} },
     });
     definePlugin(withSettings, {
       kv: { counter: z.number().int(), lastUser: z.string() },

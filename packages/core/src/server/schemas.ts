@@ -22,7 +22,9 @@ export const pluginInfoSchema = z.object({
   hasSettings: z
     .boolean()
     .optional()
-    .describe('Absent until the core has loaded the plugin definition'),
+    .describe(
+      'Has settings or user-settable secrets; absent until the core has loaded the plugin definition',
+    ),
   panel: z
     .object({
       entry: z.string().describe('URL of the panel bundle'),

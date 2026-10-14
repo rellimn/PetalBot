@@ -56,6 +56,27 @@ export const saveSettings = async (
   ((await api.patch(pluginPath(id, 'settings'), patch)) as { values: Record<string, unknown> })
     .values;
 
+/** A user-settable secret of a plugin; the value never leaves the server. */
+export interface PluginSecret {
+  readonly name: string;
+  readonly label: string;
+  readonly description?: string;
+  readonly set: boolean;
+}
+
+const secretPath = (id: string, name: string): string =>
+  `${pluginPath(id, 'secrets')}/${encodeURIComponent(name)}`;
+
+export const loadSecrets = async (api: Api, id: string): Promise<readonly PluginSecret[]> =>
+  ((await api.get(pluginPath(id, 'secrets'))) as { secrets: PluginSecret[] }).secrets;
+
+export const saveSecret = async (api: Api, id: string, name: string, value: string) =>
+  (await api.put(secretPath(id, name), { value })) as PluginSecret;
+
+export const clearSecret = async (api: Api, id: string, name: string): Promise<void> => {
+  await api.delete(secretPath(id, name));
+};
+
 export interface LogQuery {
   readonly plugin?: string;
   readonly level?: LogLevel;

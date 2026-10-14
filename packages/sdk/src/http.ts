@@ -32,4 +32,9 @@ export interface HttpApi {
     handler: HttpHandler,
     options?: HttpRouteOptions,
   ): Disposer;
+  /**
+   * The absolute public URL of an own route path, e.g. `url('/auth/callback')` ->
+   * `https://bot.example.com/api/p/<pluginId>/auth/callback`. For OAuth redirects and webhooks.
+   */
+  url(path: string): string;
 }

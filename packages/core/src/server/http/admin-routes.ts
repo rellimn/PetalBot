@@ -17,6 +17,8 @@ import {
   overlayTokenBody,
   pluginInfoBody,
   pluginListBody,
+  pluginSecretBody,
+  pluginSecretListBody,
   settingsBody,
   settingsValuesBody,
 } from './schemas.ts';
@@ -24,6 +26,12 @@ import {
 const OWNER = 'Minimum role: owner.';
 const MOD = 'Minimum role: mod.';
 const pluginParams = z.object({ id: z.string().describe('Plugin id') });
+const secretParams = z.object({
+  id: z.string().describe('Plugin id'),
+  name: z.string().describe('Secret name'),
+});
+/** Longest value a panel may store. */
+export const MAX_SECRET_VALUE_LENGTH = 16_384;
 const instanceParams = z.object({ id: z.string().describe('Overlay instance id') });
 const configSchema = z.record(z.string(), z.unknown());
 const instanceName = z
@@ -305,6 +313,81 @@ export function registerAdminRoutes(app: OpenAPIHono<AppEnv>, deps: AppDeps): vo
       const patch = c.req.valid('json');
       const values = await action(id, () => manager.updateSettings(id, patch));
       return c.json({ values: values as Record<string, unknown> }, 200);
+    },
+  );
+
+  const noSecret = (id: string, name: string): ApiError =>
+    new ApiError(404, 'not_found', `Plugin "${id}" has no user-settable secret "${name}"`);
+
+  app.openapi(
+    createRoute({
+      method: 'get',
+      path: '/api/plugins/{id}/secrets',
+      tags: ['plugins'],
+      summary: 'List user-settable secrets',
+      description: `${OWNER} Names, labels and whether a value is set; never the values. Also works for stopped plugins.`,
+      security: SECURITY,
+      request: { params: pluginParams },
+      responses: {
+        200: json(pluginSecretListBody, 'The user-settable secrets, in declaration order'),
+        ...errors(401, 403, 404, 409),
+      },
+    }),
+    async (c) => {
+      requireRole(c, 'owner');
+      const { id } = c.req.valid('param');
+      const secrets = await action(id, () => manager.secrets(id));
+      return c.json({ secrets }, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: 'put',
+      path: '/api/plugins/{id}/secrets/{name}',
+      tags: ['plugins'],
+      summary: 'Set a user-settable secret',
+      description: `${OWNER} Surrounding whitespace is trimmed; an empty value deletes the secret. The value is never returned. Running plugins are notified.`,
+      security: SECURITY,
+      request: {
+        params: secretParams,
+        body: jsonBody(
+          z.object({ value: z.string().max(MAX_SECRET_VALUE_LENGTH).describe('The new value') }),
+          true,
+        ),
+      },
+      responses: {
+        200: json(pluginSecretBody, 'The secret after the write'),
+        ...errors(400, 401, 403, 404, 409),
+      },
+    }),
+    async (c) => {
+      requireRole(c, 'owner');
+      const { id, name } = c.req.valid('param');
+      const { value } = c.req.valid('json');
+      const status = await action(id, () => manager.setSecret(id, name, value));
+      if (!status) throw noSecret(id, name);
+      return c.json(status, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: 'delete',
+      path: '/api/plugins/{id}/secrets/{name}',
+      tags: ['plugins'],
+      summary: 'Delete a user-settable secret',
+      description: `${OWNER} Running plugins are notified.`,
+      security: SECURITY,
+      request: { params: secretParams },
+      responses: { 204: { description: 'Deleted' }, ...errors(401, 403, 404, 409) },
+    }),
+    async (c) => {
+      requireRole(c, 'owner');
+      const { id, name } = c.req.valid('param');
+      const status = await action(id, () => manager.deleteSecret(id, name));
+      if (!status) throw noSecret(id, name);
+      return c.body(null, 204);
     },
   );
 
