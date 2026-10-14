@@ -13,8 +13,8 @@ const shop = defineContract({
   id: 'shop',
   version: '1.0.0',
   rpc: {
-    items: { output: z.array(Item), expose: { panel: 'mod' } },
-    stock: { output: z.number(), expose: { panel: 'mod' } },
+    items: { kind: 'query', output: z.array(Item), expose: { panel: 'mod' } },
+    stock: { kind: 'query', output: z.number(), expose: { panel: 'mod' } },
     buy: {
       input: z.object({ id: z.string() }),
       output: Result(z.object({ left: z.number() })),
@@ -26,12 +26,11 @@ const shop = defineContract({
 const other = defineContract({
   id: 'other',
   version: '1.0.0',
-  rpc: { status: { output: z.string(), expose: { panel: 'mod' } } },
+  rpc: { status: { kind: 'query', output: z.string(), expose: { panel: 'mod' } } },
 });
 
 const api = createPluginClient(shop, {
   dependencies: [other],
-  queries: { 'shop.items': {}, 'shop.stock': {}, 'other.status': {} },
   mutations: { 'shop.note': { invalidates: ['shop.stock'] } },
 });
 
@@ -90,7 +89,7 @@ async function loaded() {
 }
 
 describe('mutations', () => {
-  it('invalidates the own contract queries after success, not the dependencies', async () => {
+  it('invalidates the own contract queries after success, with or without a definition, not the dependencies', async () => {
     const { socket } = await loaded();
     await userEvent.click(screen.getByRole('button', { name: 'Buy' }));
     act(() => {

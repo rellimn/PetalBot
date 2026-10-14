@@ -16,7 +16,12 @@ const quotesContract = defineContract({
     cleared: { schema: z.object({}), expose: ['panel'] },
   },
   rpc: {
-    list: { input: z.object({}), output: z.array(z.string()), expose: { panel: 'mod' } },
+    list: {
+      kind: 'query',
+      input: z.object({}),
+      output: z.array(z.string()),
+      expose: { panel: 'mod' },
+    },
   },
 });
 const refreshing = createPluginClient(quotesContract, {
@@ -79,6 +84,7 @@ const byKey = defineContract({
   },
   rpc: {
     get: {
+      kind: 'query',
       input: z.object({ key: z.string() }),
       output: z.object({ key: z.string(), value: z.number() }),
       expose: { panel: 'mod' },

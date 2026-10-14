@@ -61,6 +61,16 @@ type Member<
     : never
   : never;
 
+/** The names in `Names` whose RPC the contract declares as `kind: 'query'`. */
+export type QueryRpcName<All extends ContractShape, Names extends string> = {
+  [N in Names]: Member<All, N, 'rpc'> extends { kind: 'query' } ? N : never;
+}[Names];
+/** The names in `Names` whose RPC is a mutation (no `kind`, or `kind: 'mutation'`). */
+export type MutationRpcName<All extends ContractShape, Names extends string> = Exclude<
+  Names,
+  QueryRpcName<All, Names>
+>;
+
 /** What a caller passes: the RPC's input, or `undefined` for RPCs without input. */
 export type RpcInput<All extends ContractShape, N extends string> =
   Member<All, N, 'rpc'> extends { input: infer I extends z.ZodType } ? z.input<I> : undefined;
@@ -89,10 +99,21 @@ export interface QueryDefinition<All extends ContractShape, Ev extends string, N
   };
 }
 
-/** Per mutating RPC: which queries to invalidate after success (default: the own contract's). */
-export type MutationDefinitions<Rpc extends string, Keys extends string> = Partial<
-  Readonly<Record<Rpc, { readonly invalidates?: readonly Keys[] }>>
->;
+/**
+ * How the queries of a client stay fresh, by query RPC name. Unlisted queries stay plain.
+ * Without any query it is a record of `never`: an empty mapped type would be `{}`, which
+ * accepts any key, so a misplaced mutation would go unnoticed.
+ */
+export type QueryDefinitions<All extends ContractShape, Ev extends string, Q extends string> = [
+  Q,
+] extends [never]
+  ? Readonly<Record<string, never>>
+  : { readonly [N in Q]?: QueryDefinition<All, Ev, N> };
+
+/** Per mutation RPC: which queries to invalidate after success (default: the own contract's). */
+export type MutationDefinitions<M extends string, Q extends string> = [M] extends [never]
+  ? Readonly<Record<string, never>>
+  : Partial<Readonly<Record<M, { readonly invalidates?: readonly Q[] }>>>;
 
 export interface QueryUseOptions {
   readonly enabled?: boolean;
@@ -143,9 +164,8 @@ type Namespace<
   C extends ContractShape,
   Rpc extends string,
   Ev extends string,
-  Keys extends string,
 > = {
-  readonly [K in ScopedKeys<C, RpcsOf<C>, Rpc>]: `${C['id']}.${K}` extends Keys
+  readonly [K in ScopedKeys<C, RpcsOf<C>, Rpc>]: RpcsOf<C>[K] extends { kind: 'query' }
     ? QueryHandle<RpcInput<All, `${C['id']}.${K}`>, RpcOutput<All, `${C['id']}.${K}`>>
     : MutationHandle<RpcInput<All, `${C['id']}.${K}`>, RpcOutput<All, `${C['id']}.${K}`>>;
 } & {
@@ -156,13 +176,8 @@ type Namespace<
 };
 
 /** `api.<contractId>.<member>`: one namespace per contract the client may use. */
-export type ClientApi<
-  All extends ContractShape,
-  Rpc extends string,
-  Ev extends string,
-  Keys extends string,
-> = {
-  readonly [Id in All['id']]: Namespace<All, Extract<All, { id: Id }>, Rpc, Ev, Keys>;
+export type ClientApi<All extends ContractShape, Rpc extends string, Ev extends string> = {
+  readonly [Id in All['id']]: Namespace<All, Extract<All, { id: Id }>, Rpc, Ev>;
 };
 
 /** The TanStack query key of an RPC query (for invalidation). */
@@ -230,12 +245,15 @@ interface DeclaredQuery {
   readonly schemas: WireSchemas;
   readonly live: LiveBinding;
   readonly signature: string;
+  /** Declared by a client of the RPC's own contract (not a dependent's). */
+  readonly owner: boolean;
 }
 
 /**
- * Every query any client declared, by RPC name. Generic panel UI (the dashboard's choice labels,
- * the choice select of generated forms) reuses the plugin's own definition through
- * `useDeclaredQuery`, so it stays as live as the plugin's components. The last declaration wins.
+ * Every query any client created, by RPC name. The choice selects and labels of the panel
+ * (`useChoices` in host.ts) reuse the plugin's own definition through `useDeclaredQuery`, so
+ * they stay as live as the plugin's components. The owner's latest client wins (a reloaded
+ * bundle replaces its old definition, even with none); a dependent's client only fills a gap.
  */
 const declaredQueries = new Map<string, DeclaredQuery>();
 
@@ -282,8 +300,9 @@ function useLiveRpc(
 }
 
 /**
- * An RPC query by name, live with the definition some plugin client declared for it (plain when
- * none did). For generic UI that knows only the name; plugin code uses its client's handles.
+ * An RPC query by name, live with the definition registered for it (plain when none is). Not
+ * part of the plugin API: only `useChoices` (host.ts) uses it, with names from `choice()`
+ * metadata, which the contract checks guarantee to be queries. Plugin code uses its handles.
  */
 export function useDeclaredQuery(
   name: string,
@@ -294,6 +313,7 @@ export function useDeclaredQuery(
     schemas: NO_SCHEMAS,
     live: { refreshOn: [], update: {} },
     signature: '',
+    owner: false,
   };
   return useLiveRpc(declared, name, input, options);
 }
@@ -302,14 +322,16 @@ function queryHandle(
   schemas: WireSchemas,
   name: string,
   hasInput: boolean,
-  definition: RuntimeQueryDefinition,
+  definition: RuntimeQueryDefinition | undefined,
+  owner: boolean,
 ) {
   const live: LiveBinding = {
-    refreshOn: definition.refreshOn ?? [],
-    update: definition.update ?? {},
+    refreshOn: definition?.refreshOn ?? [],
+    update: definition?.update ?? {},
   };
-  const declared: DeclaredQuery = { schemas, live, signature: liveSignature(live) };
-  declaredQueries.set(name, declared);
+  const declared: DeclaredQuery = { schemas, live, signature: liveSignature(live), owner };
+  const registered = declaredQueries.get(name);
+  if (owner || !registered?.owner) declaredQueries.set(name, declared);
   function useQuery(...args: unknown[]): UseQueryResult<unknown, ClientError> {
     const input = hasInput ? args[0] : undefined;
     const options = (hasInput ? args[1] : args[0]) as QueryUseOptions | undefined;
@@ -394,33 +416,42 @@ function eventHandle(schemas: WireSchemas, name: string) {
   return { useEvent };
 }
 
-/** Builds `api.<contractId>.<member>` handles for the allowed members of `contracts`. */
+/** Builds `api.<contractId>.<member>` handles for the allowed members of the contracts. */
 function buildClient(
-  contracts: readonly ContractShape[],
+  own: ContractShape,
+  dependencies: readonly ContractShape[],
   allowed: Allowed,
   definition: RuntimeDefinition,
 ): Record<string, Record<string, object>> {
+  const contracts = [own, ...dependencies];
   const schemas = wireSchemas(contracts);
   const queries = definition.queries ?? {};
   const mutations = definition.mutations ?? {};
-  const ownQueries = Object.keys(queries).filter((name) =>
-    name.startsWith(`${contracts[0]?.id ?? ''}.`),
-  );
+  // The default invalidation: every query of the own contract this client can use.
+  const ownQueries = Object.entries(own.rpc ?? {})
+    .filter(([member, def]) => def.kind === 'query' && allowed.rpc(`${own.id}.${member}`, def))
+    .map(([member]) => `${own.id}.${member}`);
   const api: Record<string, Record<string, object>> = {};
   for (const contract of contracts) {
     const namespace: Record<string, object> = {};
     for (const [member, def] of Object.entries(contract.rpc ?? {})) {
       const name = `${contract.id}.${member}`;
       if (!allowed.rpc(name, def)) continue;
-      const query = Object.hasOwn(queries, name) ? queries[name] : undefined;
-      namespace[member] = query
-        ? queryHandle(schemas, name, def.input !== undefined, query)
-        : mutationHandle(
-            schemas,
-            name,
-            (Object.hasOwn(mutations, name) ? mutations[name]?.invalidates : undefined) ??
-              ownQueries,
-          );
+      namespace[member] =
+        def.kind === 'query'
+          ? queryHandle(
+              schemas,
+              name,
+              def.input !== undefined,
+              Object.hasOwn(queries, name) ? queries[name] : undefined,
+              contract === own,
+            )
+          : mutationHandle(
+              schemas,
+              name,
+              (Object.hasOwn(mutations, name) ? mutations[name]?.invalidates : undefined) ??
+                ownQueries,
+            );
     }
     for (const [member, def] of Object.entries(contract.events ?? {})) {
       const name = `${contract.id}.${member}`;
@@ -434,57 +465,62 @@ function buildClient(
 /**
  * The typed client of a plugin's panel code: `api.<contractId>.<member>` for the own contract and
  * every dependency. Create it once at module scope (the React Compiler needs stable hooks).
- * RPCs listed in `queries` get `useQuery`; all others get `useMutation`.
+ * RPCs the contract declares as `kind: 'query'` get `useQuery`; all others get `useMutation`.
+ * `queries` only says how queries stay fresh, `mutations` what they invalidate.
  */
 export function createPluginClient<
   const Own extends ContractShape,
   const Deps extends readonly ContractShape[] = [],
-  const Keys extends PanelRpcName<Own | Deps[number]> = never,
 >(
   contract: Own,
   definition: {
     readonly dependencies?: Deps;
-    readonly queries?: {
-      readonly [N in Keys]: QueryDefinition<
-        Own | Deps[number],
-        PanelEventName<Own | Deps[number]>,
-        N
-      >;
-    };
-    readonly mutations?: MutationDefinitions<PanelRpcName<Own | Deps[number]>, Keys>;
+    readonly queries?: QueryDefinitions<
+      Own | Deps[number],
+      PanelEventName<Own | Deps[number]>,
+      QueryRpcName<Own | Deps[number], PanelRpcName<Own | Deps[number]>>
+    >;
+    readonly mutations?: MutationDefinitions<
+      MutationRpcName<Own | Deps[number], PanelRpcName<Own | Deps[number]>>,
+      QueryRpcName<Own | Deps[number], PanelRpcName<Own | Deps[number]>>
+    >;
   } = {},
 ): ClientApi<
   Own | Deps[number],
   PanelRpcName<Own | Deps[number]>,
-  PanelEventName<Own | Deps[number]>,
-  Keys
+  PanelEventName<Own | Deps[number]>
 > {
-  const contracts = [contract, ...(definition.dependencies ?? [])];
   const allowed: Allowed = {
     rpc: (_name, def) => def.expose?.panel !== undefined,
     event: (_name, def) => def.expose?.includes('panel') === true,
   };
-  return buildClient(contracts, allowed, definition as RuntimeDefinition) as never;
+  return buildClient(
+    contract,
+    definition.dependencies ?? [],
+    allowed,
+    definition as RuntimeDefinition,
+  ) as never;
 }
 
 /**
  * The typed client of an overlay: exactly the events and RPCs its contract declaration lists.
  * Create it once at module scope, like `createPluginClient`.
  */
-export function createOverlayClient<
-  const C extends ContractShape,
-  const N extends OverlayName<C>,
-  const Keys extends OverlayRpcName<C, N> = never,
->(
+export function createOverlayClient<const C extends ContractShape, const N extends OverlayName<C>>(
   contract: C,
   name: N,
   definition: {
-    readonly queries?: {
-      readonly [K in Keys]: QueryDefinition<OverlayScope<C, N>, OverlayEventName<C, N>, K>;
-    };
-    readonly mutations?: MutationDefinitions<OverlayRpcName<C, N>, Keys>;
+    readonly queries?: QueryDefinitions<
+      OverlayScope<C, N>,
+      OverlayEventName<C, N>,
+      QueryRpcName<OverlayScope<C, N>, OverlayRpcName<C, N>>
+    >;
+    readonly mutations?: MutationDefinitions<
+      MutationRpcName<OverlayScope<C, N>, OverlayRpcName<C, N>>,
+      QueryRpcName<OverlayScope<C, N>, OverlayRpcName<C, N>>
+    >;
   } = {},
-): ClientApi<OverlayScope<C, N>, OverlayRpcName<C, N>, OverlayEventName<C, N>, Keys> {
+): ClientApi<OverlayScope<C, N>, OverlayRpcName<C, N>, OverlayEventName<C, N>> {
   const declared = contract.overlays ?? {};
   const overlay = Object.hasOwn(declared, name) ? declared[name] : undefined;
   const rpc = new Set(overlay?.rpc ?? []);
@@ -494,7 +530,8 @@ export function createOverlayClient<
     event: (qualified) => events.has(qualified),
   };
   return buildClient(
-    [contract, ...(overlay?.dependencies ?? [])],
+    contract,
+    overlay?.dependencies ?? [],
     allowed,
     definition as RuntimeDefinition,
   ) as never;

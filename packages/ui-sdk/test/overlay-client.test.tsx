@@ -18,18 +18,24 @@ const alerts = defineContract({
   id: 'alerts',
   version: '1.0.0',
   rpc: {
-    recent: { input: z.object({}), output: z.array(z.string()), expose: { overlay: true } },
+    recent: {
+      kind: 'query',
+      input: z.object({}),
+      output: z.array(z.string()),
+      expose: { overlay: true },
+    },
+    dismiss: { output: z.object({}), expose: { overlay: true } },
   },
   overlays: {
     box: {
       dependencies: [stream],
       config: z.object({}),
       events: ['stream.follow'],
-      rpc: ['alerts.recent'],
+      rpc: ['alerts.recent', 'alerts.dismiss'],
     },
   },
 });
-const box = createOverlayClient(alerts, 'box', { queries: { 'alerts.recent': {} } });
+const box = createOverlayClient(alerts, 'box');
 
 function Box() {
   const recent = box.alerts.recent.useQuery({});
@@ -47,7 +53,9 @@ function Box() {
 describe('createOverlayClient', () => {
   it('has namespaces for the own contract and the overlay dependencies, limited to the declaration', () => {
     expect(Object.keys(box).toSorted()).toEqual(['alerts', 'stream']);
-    expect(Object.keys(box.alerts)).toEqual(['recent']);
+    expect(Object.keys(box.alerts).toSorted()).toEqual(['dismiss', 'recent']);
+    expect(Object.keys(box.alerts.recent).toSorted()).toEqual(['call', 'useQuery']);
+    expect(Object.keys(box.alerts.dismiss).toSorted()).toEqual(['call', 'useMutation']);
     expect(Object.keys(box.stream)).toEqual(['follow']);
   });
 

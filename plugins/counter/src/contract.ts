@@ -32,7 +32,7 @@ const CounterRef = z.object({ counter: z.string().min(1).max(64) });
 export const counterContract = defineContract({
   id: 'counter',
   // Must equal the package.json version. A breaking change to this contract is a major bump.
-  version: '2.0.0',
+  version: '3.0.0',
 
   // Settings live in the contract, so the panel and the tests see their type. Give every field
   // a default: a fresh install starts without any stored settings.
@@ -52,13 +52,17 @@ export const counterContract = defineContract({
   },
 
   rpc: {
+    // `kind: 'query'` marks a read: clients get useQuery for it and may repeat it freely (on
+    // mount, on focus, after events). Everything without a kind is a mutation (useMutation).
     // RPCs without `input` take none: callers write ctx.call('counter.list').
-    list: { output: z.array(Counter), expose: { panel: 'mod' } },
+    list: { kind: 'query', output: z.array(Counter), expose: { panel: 'mod' } },
     // The values behind choice('counter.options') below: [{ value: id, label: name }].
-    options: { output: Choices, expose: { panel: 'mod' } },
+    // choice() only accepts queries.
+    options: { kind: 'query', output: Choices, expose: { panel: 'mod' } },
     // null rather than an error: a widget or overlay may point at a counter deleted since
     // (see docs/plugin-guide.md#11-when-to-use-what, Result vs. throwing).
     get: {
+      kind: 'query',
       input: CounterRef,
       output: Counter.nullable(),
       expose: { panel: 'mod', overlay: true },

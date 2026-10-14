@@ -16,7 +16,15 @@ export interface HookDef<S extends z.ZodType = z.ZodType> {
   readonly failClosed?: boolean;
 }
 
+/** What an RPC does: `query` only reads; `mutation` (the default) may change something. */
+export type RpcKind = 'query' | 'mutation';
+
 export interface RpcDef<I extends z.ZodType = z.ZodType, O extends z.ZodType = z.ZodType> {
+  /**
+   * `query` for an RPC that only reads and is safe to repeat: clients may call it on mount, on
+   * focus, on retry and after every event. Omit for a mutation.
+   */
+  readonly kind?: RpcKind;
   /** Omit for an RPC without input: callers pass nothing, and the input must be `undefined`. */
   readonly input?: I;
   readonly output: O;
@@ -125,12 +133,16 @@ type UsedChoices<C> =
   | (C extends { settings: infer S } ? ChoicesIn<S> : never)
   | (C extends { widgets: infer W } ? ChoicesIn<ConfigOf<W[keyof W]>> : never)
   | (C extends { overlays: infer O } ? ChoicesIn<ConfigOf<O[keyof O]>> : never);
-/** Own RPCs a `choice()` may name: no input, output `Choices`, `expose.panel`. */
+/** Own RPCs a `choice()` may name: queries without input, output `Choices`, `expose.panel`. */
 type ChoiceRpcs<C> = C extends { id: infer Id extends string; rpc: infer R }
   ? {
       [K in keyof R & string]: R[K] extends { input: z.ZodType }
         ? never
-        : R[K] extends { output: infer Out extends z.ZodType; expose: { panel: Role } }
+        : R[K] extends {
+              kind: 'query';
+              output: infer Out extends z.ZodType;
+              expose: { panel: Role };
+            }
           ? z.output<Out> extends readonly { value: string; label: string }[]
             ? `${Id}.${K}`
             : never
@@ -144,7 +156,7 @@ export type CheckChoices<C extends ContractShape> = [
 ] extends [never]
   ? unknown
   : {
-      readonly 'choice() needs an own RPC without input, with output Choices and expose.panel': Exclude<
+      readonly 'choice() needs an own query RPC without input, with output Choices and expose.panel': Exclude<
         UsedChoices<C>,
         ChoiceRpcs<C>
       >;
@@ -153,16 +165,27 @@ export type CheckChoices<C extends ContractShape> = [
 const ID_PATTERN = /^[a-z][a-z0-9-]*$/;
 const MEMBER_PATTERN = /^[a-zA-Z][a-zA-Z0-9]*$/;
 const SEMVER_PATTERN = /^\d+\.\d+\.\d+$/;
+// A Set, not a comparison chain: TypeScript knows only these two values can occur, so
+// `no-unnecessary-condition` rejects comparing against them one by one.
+const RPC_KINDS: ReadonlySet<string> = new Set<RpcKind>(['query', 'mutation']);
 
 /**
  * Declares a plugin's public surface. Keeps literal types so names autocomplete.
- * Throws on malformed ids, versions, member names, widget ids, overlay declarations and
- * `choice()` fields.
+ * Throws like `checkContract`.
  */
 export function defineContract<const C extends ContractShape>(
   contract: C & CheckOverlays<C> & CheckChoices<C>,
 ): C {
-  const shape: ContractShape = contract;
+  checkContract(contract);
+  return contract;
+}
+
+/**
+ * The runtime checks of `defineContract`: throws on malformed ids, versions, member names, RPC
+ * kinds, widget ids, overlay declarations and `choice()` fields. The core runs them again when
+ * it loads a plugin, because `definePlugin` accepts any object shaped like a contract.
+ */
+export function checkContract(shape: ContractShape): void {
   if (!ID_PATTERN.test(shape.id)) {
     throw new Error(`Invalid contract id "${shape.id}" (expected ${String(ID_PATTERN)})`);
   }
@@ -190,6 +213,13 @@ export function defineContract<const C extends ContractShape>(
       seen.set(member, group);
     }
   }
+  for (const [member, def] of Object.entries(shape.rpc ?? {})) {
+    if (def.kind !== undefined && !RPC_KINDS.has(def.kind)) {
+      throw new Error(
+        `Invalid kind "${def.kind}" of RPC "${member}" in contract "${shape.id}" (expected "query" or "mutation")`,
+      );
+    }
+  }
   for (const name of Object.keys(shape.widgets ?? {})) {
     if (!ID_PATTERN.test(name)) {
       throw new Error(
@@ -201,10 +231,9 @@ export function defineContract<const C extends ContractShape>(
     checkOverlay(shape, name, overlay);
   }
   checkChoices(shape);
-  return contract;
 }
 
-/** Each `choice()` field must name an own RPC without input and with `expose.panel`. */
+/** Each `choice()` field must name an own query RPC without input and with `expose.panel`. */
 function checkChoices(contract: ContractShape): void {
   const forms: [string, z.ZodObject | undefined][] = [
     ['Settings', contract.settings],
@@ -222,9 +251,9 @@ function checkChoices(contract: ContractShape): void {
       const def = rpc.startsWith(`${contract.id}.`)
         ? findMember([contract], rpc, (c) => c.rpc)
         : undefined;
-      if (def === undefined || def.input !== undefined || def.expose?.panel === undefined) {
+      if (def?.kind !== 'query' || def.input !== undefined || def.expose?.panel === undefined) {
         throw new Error(
-          `${form} of contract "${contract.id}": field "${field}" uses choice("${rpc}"), which must name an own RPC without input and with expose.panel`,
+          `${form} of contract "${contract.id}": field "${field}" uses choice("${rpc}"), which must name an own query RPC without input and with expose.panel`,
         );
       }
     }

@@ -48,7 +48,7 @@ export const alertsContract = defineContract({
   events: { shown: { schema: Alert, expose: ['panel', 'overlay'] } },
   hooks: { beforeShow: { input: Alert, failClosed: false } },
   rpc: {
-    recent: { output: z.array(Alert), expose: { panel: 'mod', overlay: true } }, // no input
+    recent: { kind: 'query', output: z.array(Alert), expose: { panel: 'mod', overlay: true } }, // no input
 
     clear: { output: Result(z.object({})), expose: { panel: 'owner' } },
   },
@@ -70,19 +70,20 @@ export const alertsContract = defineContract({
 | `settings`  | Settings schema, typed everywhere (server `ctx.settings`, custom settings forms, the test harness). Every field needs a default.                                                                                                                                              |
 | `events`    | Fire-and-forget fan-out. Only the owner emits. `expose` makes an event reachable from the panel and/or overlays.                                                                                                                                                              |
 | `hooks`     | Awaited, ordered pipeline that can modify or veto. Only the owner runs it; dependents tap it. Browsers never see hooks.                                                                                                                                                       |
-| `rpc`       | Request/response, validated both ways. `expose.panel` is the minimum role; `expose.overlay: true` allows overlays.                                                                                                                                                            |
+| `rpc`       | Request/response, validated both ways. `kind: 'query'` marks a read that clients may repeat freely (`useQuery`); without it the RPC is a mutation (`useMutation`). `expose.panel` is the minimum role; `expose.overlay: true` allows overlays.                                |
 | `providers` | Interfaces dependents implement, keyed by a connection id. Every method is optional for implementers.                                                                                                                                                                         |
 | `widgets`   | Every dashboard widget, with an optional per-instance `config`. Titles and components live in `definePanel`.                                                                                                                                                                  |
 | `overlays`  | Each overlay's instance config and the exact events and RPCs it may use. Names must be exposed to `overlay` and come from the own contract or the overlay's `dependencies`. Wrong names are compile errors and also fail at runtime. Overlay names match `^[a-z][a-z0-9-]*$`. |
 
 RPCs without `input` take none: `ctx.call('alerts.recent')`. Member names must be unique across
 `events`, `hooks`, `rpc` and `providers`. `choice('<own rpc>')` makes a string field whose valid
-values an own RPC lists at runtime (no input, output `Choices`, `expose.panel`). It's allowed in
+values an own RPC lists at runtime (`kind: 'query'`, no input, output `Choices`, `expose.panel`). It's allowed in
 top-level fields of `settings`, widget `config` and overlay `config`.
 
 Versioning:
 
 - Adding members or optional fields is a minor version.
+- Changing an RPC's `kind` is a major version: clients switch between `useQuery` and `useMutation`.
 - Removing or renaming anything, making a field required, changing a type, or adding a literal to a closed union (including `Result` failure reasons) is a major version.
 
 ## Server entry: `definePlugin`
@@ -231,8 +232,9 @@ configure dialog, "Needs configuration" and the title suffix are described in
 
 ## Panel client: `createPluginClient`
 
-The client is described in `docs/api/ui-sdk.md` (Client). The counter's `src/client.ts` is the
-worked example:
+The client is described in `docs/api/ui-sdk.md` (Client). Whether an RPC gets `useQuery` or
+`useMutation` comes from its `kind` in the contract; the definition only says how queries stay
+fresh. The counter's `src/client.ts` is the worked example:
 
 ```ts
 export const api = createPluginClient(counterContract, {
@@ -299,7 +301,7 @@ function AlertBox({ config }: OverlayProps<OverlayConfig<typeof alertsContract, 
 export default defineOverlay(alertsContract, 'box', { component: AlertBox });
 ```
 
-- **Client:** `createOverlayClient(contract, name, { queries, mutations })` has exactly the events
+- **Client:** `createOverlayClient(contract, name, { queries?, mutations? })` has exactly the events
   and RPCs the declaration lists (anything else is a compile error), with the same handles as
   the panel client (`box.<id>.<member>.useQuery/useMutation/call/useEvent`). The server enforces
   the same list.

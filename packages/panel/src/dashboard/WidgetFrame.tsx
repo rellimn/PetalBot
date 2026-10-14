@@ -5,7 +5,7 @@ import type { WidgetInstance } from '../app/endpoints.ts';
 import { hasRole } from '../app/roles.ts';
 import { PluginBoundary } from '../plugins/PluginBoundary.tsx';
 import { useKnownPanel, usePanel } from '../plugins/registry.ts';
-import { useChoices } from '../settings/choices.ts';
+import { useChoices } from '@petalbot/ui-sdk/host';
 import styles from './dashboard.module.css';
 
 function Placeholder({ text }: { readonly text: string }) {

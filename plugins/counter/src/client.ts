@@ -3,8 +3,9 @@
  *
  * Runs in the panel. Created once at module scope: the React Compiler needs the hooks behind it
  * to be the same functions on every render (see docs/plugin-guide.md#10-watch-out-for). The
- * definition decides, once for every component, which RPCs are read (`queries`) and how they
- * stay fresh; everything else is a mutation.
+ * contract decides which RPCs are reads (`kind: 'query'`: useQuery) and which are writes
+ * (useMutation). This definition decides, once for every component, how the reads stay fresh
+ * and what the writes refetch; reads not listed here are plain queries.
  *
  * Guide: docs/plugin-guide.md#5-the-client.
  * Read next: src/panel.tsx.

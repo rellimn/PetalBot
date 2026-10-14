@@ -10,7 +10,7 @@ const notes = defineContract({
   id: 'notes',
   version: '1.0.0',
   events: { added: { schema: z.object({ text: z.string() }), expose: ['panel'] } },
-  rpc: { list: { output: z.array(z.string()), expose: { panel: 'mod' } } },
+  rpc: { list: { kind: 'query', output: z.array(z.string()), expose: { panel: 'mod' } } },
 });
 const api = createPluginClient(notes, {
   queries: {

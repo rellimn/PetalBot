@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { AnyPluginDefinition, ContractShape } from '@petalbot/sdk';
+import { checkContract, type AnyPluginDefinition, type ContractShape } from '@petalbot/sdk';
 import { errorMessage } from '../names.ts';
 import type { DiscoveredPlugin } from './discovery.ts';
 
@@ -31,6 +31,11 @@ export async function loadDefinition(plugin: DiscoveredPlugin): Promise<AnyPlugi
     throw new Error(
       `${plugin.id}: contract version ${definition.contract.version} does not match the package version ${plugin.version}`,
     );
+  }
+  try {
+    checkContract(definition.contract);
+  } catch (error) {
+    throw new Error(`${plugin.id}: ${errorMessage(error)}`, { cause: error });
   }
   checkIds(plugin.id, 'dependencies', definition.dependencies, plugin.manifest.dependencies);
   checkIds(

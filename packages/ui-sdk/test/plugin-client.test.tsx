@@ -3,9 +3,9 @@ import { userEvent } from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { defineContract } from '@petalbot/sdk';
+import { codecs, defineContract } from '@petalbot/sdk';
 import { useConnectionStatus, usePlugins, useUser } from '../src/client/context.tsx';
-import { createPluginClient } from '../src/client/plugin-client.ts';
+import { createPluginClient, useDeclaredQuery } from '../src/client/plugin-client.ts';
 import { renderWithPetal } from './render.tsx';
 
 const quotesContract = defineContract({
@@ -13,8 +13,13 @@ const quotesContract = defineContract({
   version: '1.0.0',
   events: { added: { schema: z.object({ text: z.string() }), expose: ['panel'] } },
   rpc: {
-    list: { output: z.array(z.string()), expose: { panel: 'mod' } },
-    find: { input: z.object({ text: z.string() }), output: z.string(), expose: { panel: 'mod' } },
+    list: { kind: 'query', output: z.array(z.string()), expose: { panel: 'mod' } },
+    find: {
+      kind: 'query',
+      input: z.object({ text: z.string() }),
+      output: z.string(),
+      expose: { panel: 'mod' },
+    },
     add: {
       input: z.object({ text: z.string() }),
       output: z.object({ id: z.string() }),
@@ -23,9 +28,8 @@ const quotesContract = defineContract({
     secret: { output: z.string() },
   },
 });
-const api = createPluginClient(quotesContract, {
-  queries: { 'quotes.list': {}, 'quotes.find': {} },
-});
+// No definition: the contract alone decides that list and find are queries.
+const api = createPluginClient(quotesContract);
 
 const event = (text: string) => ({
   type: 'event',
@@ -157,5 +161,87 @@ describe('createPluginClient', () => {
       socket.drop();
     });
     expect(screen.getByText('roman reconnecting 0')).toBeTruthy();
+  });
+});
+
+const fansContract = defineContract({
+  id: 'fans',
+  version: '1.0.0',
+  rpc: { count: { kind: 'query', output: z.number(), expose: { panel: 'mod' } } },
+});
+
+function Declared({ name }: { readonly name: string }) {
+  const result = useDeclaredQuery(name, undefined);
+  return <p>declared: {result.isSuccess ? 'yes' : 'no'}</p>;
+}
+
+describe('useDeclaredQuery registration', () => {
+  it("never replaces the owner's live definition with a dependent's plain use", async () => {
+    // The owner's client declares how quotes.list stays live ...
+    createPluginClient(quotesContract, {
+      queries: { 'quotes.list': { refreshOn: ['quotes.added'] } },
+    });
+    // ... and a dependent plugin's client uses it without a definition.
+    createPluginClient(fansContract, { dependencies: [quotesContract] });
+    const { socket } = renderWithPetal(<Declared name="quotes.list" />);
+    // Live: it subscribes to the owner's event before querying.
+    await waitFor(() => {
+      expect(socket.ofType('subscribe')).toMatchObject([{ event: 'quotes.added' }]);
+      expect(socket.ofType('rpc')).toMatchObject([{ name: 'quotes.list' }]);
+    });
+  });
+
+  it('lets a reloaded owner client drop its live options', async () => {
+    const notes = defineContract({
+      id: 'notes',
+      version: '1.0.0',
+      events: { added: { schema: z.object({}), expose: ['panel'] } },
+      rpc: { list: { kind: 'query', output: z.array(z.string()), expose: { panel: 'mod' } } },
+    });
+    createPluginClient(notes, { queries: { 'notes.list': { refreshOn: ['notes.added'] } } });
+    // The reloaded bundle creates its client again, now without live options.
+    createPluginClient(notes);
+    const { socket } = renderWithPetal(<Declared name="notes.list" />);
+    await waitFor(() => {
+      expect(socket.ofType('rpc')).toMatchObject([{ name: 'notes.list' }]);
+    });
+    // Subscribe frames would have gone out before the rpc frame.
+    expect(socket.ofType('subscribe')).toEqual([]);
+  });
+
+  it('decodes with the schemas of a reloaded owner client', async () => {
+    const v1 = defineContract({
+      id: 'dates',
+      version: '1.0.0',
+      rpc: {
+        next: { kind: 'query', output: z.object({ at: z.string() }), expose: { panel: 'mod' } },
+      },
+    });
+    const v2 = defineContract({
+      id: 'dates',
+      version: '2.0.0',
+      rpc: {
+        next: {
+          kind: 'query',
+          output: z.object({ at: codecs.isoDate() }),
+          expose: { panel: 'mod' },
+        },
+      },
+    });
+    createPluginClient(v1);
+    createPluginClient(v2);
+    function Next() {
+      const next = useDeclaredQuery('dates.next', undefined);
+      const at = (next.data as { at?: unknown } | undefined)?.at;
+      return <p>at: {at instanceof Date ? 'date' : typeof at}</p>;
+    }
+    const { socket } = renderWithPetal(<Next />);
+    await waitFor(() => {
+      expect(socket.ofType('rpc')).toMatchObject([{ name: 'dates.next' }]);
+    });
+    act(() => {
+      socket.answer('rpc', { at: '2026-10-14T00:00:00.000Z' });
+    });
+    expect(await screen.findByText('at: date')).toBeTruthy();
   });
 });

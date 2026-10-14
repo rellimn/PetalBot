@@ -13,7 +13,7 @@ const quotes = defineContract({
   id: 'quotes',
   version: '1.0.0',
   settings: z.object({ limit: z.number().int().default(10) }),
-  rpc: { options: { output: Choices, expose: { panel: 'mod' } } },
+  rpc: { options: { kind: 'query', output: Choices, expose: { panel: 'mod' } } },
   widgets: {
     latest: {},
     one: { config: z.object({ quote: choice('quotes.options'), big: z.boolean().default(false) }) },

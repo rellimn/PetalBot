@@ -10,7 +10,7 @@ const counterContract = defineContract({
   id: 'counter',
   version: '1.0.0',
   events: { listChanged: { schema: z.object({}), expose: ['panel'] } },
-  rpc: { options: { output: Choices, expose: { panel: 'mod' } } },
+  rpc: { options: { kind: 'query', output: Choices, expose: { panel: 'mod' } } },
   widgets: {
     value: { config: z.object({ counter: choice('counter.options').describe('Counter') }) },
     total: {},

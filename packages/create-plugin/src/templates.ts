@@ -149,12 +149,13 @@ export const ${p.camel}Contract = defineContract({
   },
 
   rpc: {
-    // A read. The client definition keeps it live (src/client.ts).
+    // A read (kind 'query'): clients get useQuery for it, and src/client.ts keeps it live.
     status: {
+      kind: 'query',
       output: z.object({ presses: z.number().int() }),
       expose: { panel: 'mod'${overlay ? ', overlay: true' : ''} },
     },
-    // A write: adds the step and answers the new total.
+    // A write (no kind: a mutation): adds the step and answers the new total.
     press: { output: z.object({ presses: z.number().int() }), expose: { panel: 'mod' } },
   },
 ${widgets}${overlays}});
@@ -265,8 +266,8 @@ export const client = (p: TemplateParams): string => `/**
  * The ${p.id} panel client: one typed handle per RPC and event, ${member('api', p.id)}.<member>.
  *
  * Runs in the panel. Created once at module scope: the React Compiler needs the hooks behind it
- * to be the same functions on every render. The definition decides, once for every component,
- * which RPCs are reads (\`queries\`) and how they stay fresh.
+ * to be the same functions on every render. The contract decides which RPCs are reads
+ * (\`kind: 'query'\`); this definition decides, once for every component, how they stay fresh.
  *
  * Guide: ${GUIDE}#5-the-client. Read next: src/panel.tsx.
  */

@@ -15,13 +15,14 @@ const schedule = defineContract({
   },
   rpc: {
     next: {
+      kind: 'query',
       input: z.object({}),
       output: z.object({ at: codecs.isoDate() }),
       expose: { panel: 'mod' },
     },
   },
 });
-const client = createPluginClient(schedule, { queries: { 'schedule.next': {} } });
+const client = createPluginClient(schedule);
 const moved = createPluginClient(schedule, {
   queries: {
     'schedule.next': {

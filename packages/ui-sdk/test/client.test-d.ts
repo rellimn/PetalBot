@@ -19,16 +19,27 @@ const counter = defineContract({
     internal: { schema: z.object({}) },
   },
   rpc: {
-    list: { output: z.array(Counter), expose: { panel: 'mod' } },
-    options: { output: Choices, expose: { panel: 'mod' } },
-    get: { input: Ref, output: Counter.nullable(), expose: { panel: 'mod', overlay: true } },
+    list: { kind: 'query', output: z.array(Counter), expose: { panel: 'mod' } },
+    options: { kind: 'query', output: Choices, expose: { panel: 'mod' } },
+    get: {
+      kind: 'query',
+      input: Ref,
+      output: Counter.nullable(),
+      expose: { panel: 'mod', overlay: true },
+    },
     increment: {
       input: Ref,
       output: Result(z.object({ counter: Counter })),
       expose: { panel: 'mod' },
     },
+    reset: {
+      kind: 'mutation',
+      input: Ref,
+      output: Result(z.object({ counter: Counter })),
+      expose: { panel: 'mod' },
+    },
     create: { input: z.object({ name: z.string() }), output: Counter, expose: { panel: 'owner' } },
-    hidden: { output: z.string() },
+    hidden: { kind: 'query', output: z.string() },
   },
 });
 const chat = defineContract({
@@ -36,6 +47,7 @@ const chat = defineContract({
   version: '1.0.0',
   events: { message: { schema: z.object({ text: z.string() }), expose: ['panel'] } },
   rpc: {
+    recent: { kind: 'query', output: z.array(z.string()), expose: { panel: 'mod' } },
     send: {
       input: z.object({ text: z.string() }),
       output: z.object({ id: z.string() }),
@@ -54,7 +66,6 @@ const api = createPluginClient(counter, {
   dependencies: [chat],
   queries: {
     'counter.list': { refreshOn: ['counter.listChanged'] },
-    'counter.options': {},
     'counter.get': {
       update: {
         'counter.changed': (data, event, input) => {
@@ -71,8 +82,9 @@ const api = createPluginClient(counter, {
         },
       },
     },
+    'chat.recent': { update: { 'chat.message': (list, event) => [...list, event.payload.text] } },
   },
-  mutations: { 'counter.create': { invalidates: ['counter.list'] } },
+  mutations: { 'counter.create': { invalidates: ['counter.list', 'chat.recent'] } },
 });
 
 /** Hooks must be called in a component; type tests only need it to compile. */
@@ -83,8 +95,14 @@ export function Uses() {
   api.counter.list.useQuery({ enabled: false });
   const one = api.counter.get.useQuery({ counter: 'a' }, { refetchInterval: 1000 });
   expectTypeOf(one.data).toEqualTypeOf<CounterRow | null | undefined>();
+  // A query without a definition is a plain query.
+  expectTypeOf(api.counter.options.useQuery().data).toEqualTypeOf<
+    { value: string; label: string }[] | undefined
+  >();
+  expectTypeOf(api.chat.recent.useQuery().data).toEqualTypeOf<string[] | undefined>();
   const increment = api.counter.increment.useMutation({ error: 'Could not count' });
   increment.mutate({ counter: 'a' });
+  api.counter.reset.useMutation().mutate({ counter: 'a' });
   expectTypeOf(api.counter.create.useMutation()).toEqualTypeOf<
     UseMutationResult<CounterRow, ClientError, { name: string }>
   >();
@@ -96,9 +114,11 @@ export function Uses() {
   api.chat.message.useEvent((event) => {
     expectTypeOf(event.payload.text).toEqualTypeOf<string>();
   });
-  // @ts-expect-error -- increment is not a query
+  // @ts-expect-error -- increment is a mutation in the contract
   api.counter.increment.useQuery({ counter: 'a' }); // eslint-disable-line @typescript-eslint/no-unsafe-call -- the intended error
-  // @ts-expect-error -- list is a query, not a mutation
+  // @ts-expect-error -- reset is declared as a mutation
+  api.counter.reset.useQuery({ counter: 'a' }); // eslint-disable-line @typescript-eslint/no-unsafe-call -- the intended error
+  // @ts-expect-error -- list is a query in the contract
   api.counter.list.useMutation(); // eslint-disable-line @typescript-eslint/no-unsafe-call -- the intended error
   expectTypeOf(api.counter).not.toHaveProperty('hidden');
   expectTypeOf(api.counter).not.toHaveProperty('internal');
@@ -127,13 +147,24 @@ describe('createPluginClient', () => {
       },
     });
     createPluginClient(counter, {
+      queries: {
+        // @ts-expect-error -- a mutation can't get query options
+        'counter.increment': { refreshOn: ['counter.changed'] },
+      },
+    });
+    createPluginClient(counter, {
+      mutations: {
+        // @ts-expect-error -- a query can't get mutation options
+        'counter.list': { invalidates: [] },
+      },
+    });
+    createPluginClient(counter, {
       // @ts-expect-error -- unknown event
       queries: { 'counter.list': { refreshOn: ['counter.nope'] } },
     });
     createPluginClient(counter, {
-      queries: { 'counter.list': {} },
       // @ts-expect-error -- invalidates only names queries
-      mutations: { 'counter.create': { invalidates: ['counter.get'] } },
+      mutations: { 'counter.create': { invalidates: ['counter.increment'] } },
     });
     createPluginClient(counter, {
       queries: {
@@ -143,9 +174,46 @@ describe('createPluginClient', () => {
     });
   });
 
-  it('treats every RPC as a mutation without a definition', () => {
+  it('takes read or write from the contract without a definition', () => {
     const bare = createPluginClient(counter);
-    expectTypeOf(bare.counter.list).toHaveProperty('useMutation');
+    expectTypeOf(bare.counter.list).toHaveProperty('useQuery');
+    expectTypeOf(bare.counter.get).toHaveProperty('useQuery');
+    expectTypeOf(bare.counter.increment).toHaveProperty('useMutation');
+    expectTypeOf(bare.counter.reset).toHaveProperty('useMutation');
     expectTypeOf(bare).not.toHaveProperty('chat');
+  });
+
+  it('rejects configuration for kinds a contract does not have', () => {
+    // An empty mapped type would be `{}`, which accepts any key; these must still fail.
+    const writes = defineContract({
+      id: 'writes',
+      version: '1.0.0',
+      rpc: { add: { output: z.number(), expose: { panel: 'mod' } } },
+    });
+    const reads = defineContract({
+      id: 'reads',
+      version: '1.0.0',
+      rpc: { list: { kind: 'query', output: z.number(), expose: { panel: 'mod' } } },
+    });
+    const empty = defineContract({ id: 'empty', version: '1.0.0' });
+    createPluginClient(writes, { queries: {}, mutations: { 'writes.add': { invalidates: [] } } });
+    createPluginClient(writes, {
+      queries: {
+        // @ts-expect-error -- writes has no queries
+        'writes.add': {},
+      },
+    });
+    createPluginClient(reads, { queries: { 'reads.list': {} }, mutations: {} });
+    createPluginClient(reads, {
+      mutations: {
+        // @ts-expect-error -- reads has no mutations
+        'reads.list': {},
+      },
+    });
+    createPluginClient(empty, { queries: {}, mutations: {} });
+    createPluginClient(empty, {
+      // @ts-expect-error -- nothing to configure
+      queries: { 'empty.list': {} },
+    });
   });
 });

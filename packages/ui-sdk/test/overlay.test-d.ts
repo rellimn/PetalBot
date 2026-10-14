@@ -17,7 +17,12 @@ const stream = defineContract({
     raid: { schema: z.object({ from: z.string(), viewers: z.number() }), expose: ['overlay'] },
   },
   rpc: {
-    recent: { input: z.object({}), output: z.array(z.string()), expose: { overlay: true } },
+    recent: {
+      kind: 'query',
+      input: z.object({}),
+      output: z.array(z.string()),
+      expose: { overlay: true },
+    },
   },
 });
 
@@ -43,7 +48,8 @@ const bare = defineContract({ id: 'bare', version: '1.0.0' });
 
 describe('createOverlayClient', () => {
   it('types exactly the members the overlay declares', () => {
-    const client = createOverlayClient(alerts, 'box', { queries: { 'stream.recent': {} } });
+    const client = createOverlayClient(alerts, 'box');
+    expectTypeOf(client.stream.recent).toHaveProperty('useQuery');
     client.stream.follow.useEvent((event) => {
       expectTypeOf(event.payload).toEqualTypeOf<{ user: string }>();
     });
@@ -55,6 +61,7 @@ describe('createOverlayClient', () => {
     expectTypeOf(client.alerts).not.toHaveProperty('ack');
 
     const ticker = createOverlayClient(alerts, 'ticker');
+    expectTypeOf(ticker.alerts.ack).toHaveProperty('useMutation');
     expectTypeOf(ticker.alerts.ack.call({ id: 'x' })).resolves.toEqualTypeOf<
       z.output<typeof alerts.rpc.ack.output>
     >();
@@ -67,6 +74,16 @@ describe('createOverlayClient', () => {
     createOverlayClient(alerts, 'nope');
     // @ts-expect-error -- bare declares no overlays
     createOverlayClient(bare, 'box');
+    createOverlayClient(alerts, 'box', {
+      // @ts-expect-error -- stream.recent needs no mutation options: it is a query
+      mutations: { 'stream.recent': { invalidates: [] } },
+    });
+    createOverlayClient(alerts, 'ticker', {
+      queries: {
+        // @ts-expect-error -- alerts.ack is a mutation
+        'alerts.ack': {},
+      },
+    });
   });
 });
 

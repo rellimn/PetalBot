@@ -57,6 +57,18 @@ describe('loadDefinition', () => {
     );
   });
 
+  it('runs the contract checks, also for contracts not made with defineContract', async () => {
+    const plugin = await pluginWith(
+      definitionSource('x').replace(
+        "version: '1.2.3' }",
+        "version: '1.2.3', rpc: { list: { kind: 'read', output: {} } } }",
+      ),
+    );
+    await expect(loadDefinition(plugin)).rejects.toThrow(
+      'hello: Invalid kind "read" of RPC "list" in contract "hello" (expected "query" or "mutation")',
+    );
+  });
+
   it('rejects a contract id or version that does not match the package', async () => {
     const wrongId = await pluginWith(definitionSource('x').replace("id: 'hello'", "id: 'other'"));
     await expect(loadDefinition(wrongId)).rejects.toThrow(

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Banner, Checkbox, Field, Input, Select, Textarea } from '@petalbot/ui-sdk';
-import { useChoices } from './choices.ts';
+import { useChoices } from '@petalbot/ui-sdk/host';
 import { isJson, type FieldSpec, type FormValues } from './schema.ts';
 import styles from './settings.module.css';
 

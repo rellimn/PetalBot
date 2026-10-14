@@ -1,12 +1,26 @@
 import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
-import { defineContract, type ContractShape, type OverlayDef } from '../src/contract.ts';
+import {
+  checkContract,
+  defineContract,
+  type ContractShape,
+  type OverlayDef,
+} from '../src/contract.ts';
 import { Choices, choice } from '../src/choice.ts';
 
 describe('defineContract', () => {
   it('returns the contract unchanged', () => {
     const contract = { id: 'quotes', version: '1.0.0' } as const;
     expect(defineContract(contract)).toBe(contract);
+  });
+
+  it('exports its runtime checks as checkContract', () => {
+    expect(() => {
+      checkContract({ id: 'quotes', version: '1.0.0' });
+    }).not.toThrow();
+    expect(() => {
+      checkContract({ id: 'Quotes', version: '1.0.0' });
+    }).toThrow(/Invalid contract id/);
   });
 
   it.each(['Quotes', '1quotes', 'quo.tes', 'quo_tes', ''])('rejects id %j', (id) => {
@@ -85,6 +99,32 @@ describe('defineContract members', () => {
     expect(contract.rpc.list.output).toBeDefined();
   });
 
+  it('accepts the RPC kinds query and mutation', () => {
+    expect(() =>
+      defineContract({
+        id: 'quotes',
+        version: '1.0.0',
+        rpc: {
+          list: { kind: 'query', output: z.array(z.string()) },
+          add: { kind: 'mutation', output: z.object({}) },
+          clear: { output: z.object({}) },
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects an unknown RPC kind', () => {
+    // Typed loosely on purpose: plain JS or a cast skips the compile-time check.
+    const shape = {
+      id: 'quotes',
+      version: '1.0.0',
+      rpc: { list: { kind: 'read', output: z.array(z.string()) } },
+    } as unknown as ContractShape;
+    expect(() => defineContract(shape)).toThrow(
+      'Invalid kind "read" of RPC "list" in contract "quotes" (expected "query" or "mutation")',
+    );
+  });
+
   it('rejects a member name used in two groups', () => {
     const shape: ContractShape = {
       id: 'quotes',
@@ -111,9 +151,9 @@ describe('defineContract choice() fields', () => {
     ...(rpcDefs ? { rpc: rpcDefs } : {}),
     widgets: { value: { config: z.object({ counter: choice(rpc).describe('Counter') }) } },
   });
-  const options = { output: Choices, expose: { panel: 'mod' as const } };
+  const options = { kind: 'query' as const, output: Choices, expose: { panel: 'mod' as const } };
 
-  it('accepts an own RPC without input that is exposed to the panel', () => {
+  it('accepts an own query RPC without input that is exposed to the panel', () => {
     expect(() => defineContract(withChoice('counter.options', { options }))).not.toThrow();
   });
 
@@ -121,10 +161,19 @@ describe('defineContract choice() fields', () => {
     ['a typo', 'counter.option', { options }],
     ['a foreign RPC', 'chat.options', { options }],
     ['an RPC with input', 'counter.options', { options: { ...options, input: z.object({}) } }],
-    ['an RPC not exposed to the panel', 'counter.options', { options: { output: Choices } }],
+    [
+      'an RPC not exposed to the panel',
+      'counter.options',
+      { options: { kind: 'query' as const, output: Choices } },
+    ],
+    [
+      'a mutation',
+      'counter.options',
+      { options: { output: Choices, expose: { panel: 'mod' as const } } },
+    ],
   ] as const)('rejects choice() fields whose RPC is not usable: %s', (_case, rpc, defs) => {
     expect(() => defineContract(withChoice(rpc, defs))).toThrow(
-      `Widget "value" of contract "counter": field "counter" uses choice("${rpc}"), which must name an own RPC without input and with expose.panel`,
+      `Widget "value" of contract "counter": field "counter" uses choice("${rpc}"), which must name an own query RPC without input and with expose.panel`,
     );
   });
 

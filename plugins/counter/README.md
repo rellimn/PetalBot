@@ -40,10 +40,10 @@ is there and are denser than elsewhere in the codebase. For the concepts behind 
 
 1. Start `pnpm dev` in the repository root (`npx -y pnpm@12.10.1 dev`) and open
    http://127.0.0.1:5173. In dev the counter starts enabled the first time it's seen; if you
-   disabled it, enable it in Admin › Plugins.
+   disabled it, enable it in Admin > Plugins.
 2. Open **Counters** in the sidebar, create a counter and count.
 3. On the dashboard, choose **Edit**, add the **Counter** widget and pick your counter.
-4. In Admin › Overlays, create a **counter › display** instance and watch its preview follow
+4. In Admin > Overlays, create a **counter > display** instance and watch its preview follow
    your clicks. Its URL goes into an OBS browser source.
 
 ## Change something

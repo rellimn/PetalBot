@@ -65,7 +65,7 @@ The scaffold is a tiny working plugin with every basic pattern:
 
 - one setting, `step`, with a generated settings form;
 - a stored total (KV key `presses`, or the table `<id>_presses` with `--db`);
-- a read RPC `status` and a write RPC `press` that adds `step` and announces it with the event
+- a read RPC `status` (`kind: 'query'`) and a write RPC `press` that adds `step` and announces it with the event
   `pressed`;
 - a page and a dashboard widget that stay live through the client definition;
 - with `--overlay`, an overlay that shows the total;
@@ -91,15 +91,19 @@ other plugins all import it, so it may import only `zod` and `@petalbot/sdk`, ne
 export const counterContract = defineContract({
   id: 'counter',
   // Must equal the package.json version. A breaking change to this contract is a major bump.
-  version: '2.0.0',
-  // …
+  version: '3.0.0',
+  // ...
   rpc: {
+    // `kind: 'query'` marks a read: clients get useQuery for it and may repeat it freely (on
+    // mount, on focus, after events). Everything without a kind is a mutation (useMutation).
     // RPCs without `input` take none: callers write ctx.call('counter.list').
-    list: { output: z.array(Counter), expose: { panel: 'mod' } },
+    list: { kind: 'query', output: z.array(Counter), expose: { panel: 'mod' } },
     // The values behind choice('counter.options') below: [{ value: id, label: name }].
-    options: { output: Choices, expose: { panel: 'mod' } },
+    // choice() only accepts queries.
+    options: { kind: 'query', output: Choices, expose: { panel: 'mod' } },
     // null rather than an error: a widget or overlay may point at a counter deleted since.
     get: {
+      kind: 'query',
       input: CounterRef,
       output: Counter.nullable(),
       expose: { panel: 'mod', overlay: true },
@@ -132,15 +136,19 @@ export const counterContract = defineContract({
   `counter.get`. Member names are unique across events, hooks, RPCs and providers.
 - **Events** (`schema`, `expose: ['panel', 'overlay']`) are fire-and-forget announcements. Only
   the owner emits them.
-- **RPCs** (`input` optional, `output`, `expose: { panel: 'mod' | 'owner', overlay?: true }`) are
-  request and response, validated both ways. The server checks the role on every call.
+- **RPCs** (`kind` optional, `input` optional, `output`,
+  `expose: { panel: 'mod' | 'owner', overlay?: true }`) are request and response, validated
+  both ways. The server checks the role on every call. `kind: 'query'` marks an RPC that only
+  reads and is safe to repeat; clients call it on mount, on focus, on retry and after events.
+  Without `kind` an RPC is a mutation: clients only call it when the user acts.
 - **Hooks** are an awaited pipeline other plugins tap to change or veto something; **providers**
   are interfaces other plugins implement, keyed by a connection (both: section 11).
 - **Settings** are a zod object; the panel generates their form. Every field needs a default.
 - **Widgets** list the dashboard widgets, each with an optional per-instance `config`.
 - **Overlays** list each overlay's instance `config` and exactly the events and RPCs it may use.
-- **`choice('<plugin>.<rpc>')`** is a string field whose valid values an own RPC lists at
-  runtime (output `Choices`: `[{ value, label }]`). Forms render it as a select.
+- **`choice('<plugin>.<rpc>')`** is a string field whose valid values an own query RPC lists at
+  runtime (`kind: 'query'`, no input, output `Choices`: `[{ value, label }]`). Forms render it
+  as a select.
 - **`Result(z.object({…}))`** is an RPC output that is either `{ ok: true, … }` or
   `{ ok: false, reason, message }`, for outcomes the caller must handle.
 
@@ -277,10 +285,12 @@ export const api = createPluginClient(counterContract, {
 - **Handles.** `api.<contract id>.<member>` mirrors the qualified name: `api.counter.list`. Ids
   with dashes need brackets: `api['my-plugin'].status`. Pass dependency contracts in
   `dependencies` to get their namespaces too.
-- **Queries** are the RPCs listed in `queries`: `useQuery(input?, { enabled })`. Everything else
-  is a mutation: `useMutation({ success?, error? })` with `mutate(input?)`. Every RPC has
+- **Queries** are the RPCs the contract marks `kind: 'query'`: `useQuery(input?, { enabled })`.
+  Everything else is a mutation: `useMutation({ success?, error? })` with `mutate(input?)`.
+  The client can't change that, so no client can turn a write into a query. Every RPC has
   `call(input?)`; every event has `useEvent(handler)`.
-- **Freshness is declared once.** `refreshOn: [events]` refetches the query when an event
+- **Freshness is declared once.** `queries` lists only queries that need live options; the
+  others are plain queries. `refreshOn: [events]` refetches the query when an event
   arrives. `update: { event: (data, event, input) => next }` computes the new data from the
   payload without a round trip; `input` is the cached entry's input, so return `data` unchanged
   when the event is about something else.
@@ -558,7 +568,8 @@ repeated values and lose the cause.
 - **KV:** per-plugin key-value storage for declared, JSON-shaped values (section 4).
 - **Live query:** a query kept fresh by events through `refreshOn` or `update` (section 5).
 - **Member:** one event, RPC, hook or provider slot of a contract.
-- **Mutation:** an RPC used as a write in the client (`useMutation`) (section 5).
+- **Mutation:** an RPC without `kind: 'query'`; clients get `useMutation` for it (sections 3
+  and 5).
 - **Overlay / overlay instance:** an OBS page a plugin defines / one configured copy of it with
   its own URL and token (section 7).
 - **Plugin DB:** the plugin's own Drizzle/SQLite database with `<id>_` tables (section 4).
@@ -567,7 +578,8 @@ repeated values and lose the cause.
   plugin's implementation of it for one connection.
 - **Qualified name:** `<contract id>.<member>`, e.g. `counter.changed`; the only way names are
   written.
-- **Query:** an RPC used as a read in the client (`useQuery`), cached per input (section 5).
+- **Query:** an RPC with `kind: 'query'`: it only reads, and clients get `useQuery` for it,
+  cached per input (sections 3 and 5).
 - **`Result`:** an RPC output that is `{ ok: true, … }` or `{ ok: false, reason, message }`
   (section 4).
 - **RPC:** a validated request-and-response call (section 3).
