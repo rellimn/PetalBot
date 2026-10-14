@@ -1,10 +1,11 @@
-import { Columns3, GripVertical, Move, Plus, X } from 'lucide-react';
+import { Columns3, GripVertical, Move, Plus, Settings2, X } from 'lucide-react';
 import { useRef, useState, type RefObject } from 'react';
 import { Button, Field, IconButton, Input, Menu, useUser } from '@petalbot/ui-sdk';
-import type { Preset, PresetColumn, WidgetRef } from '../app/endpoints.ts';
+import type { Preset, PresetColumn, WidgetInstance } from '../app/endpoints.ts';
 import { useKnownPanel, usePanels } from '../plugins/registry.ts';
 import { usePresetActions } from './api.ts';
 import { AddWidgetDialog } from './AddWidgetDialog.tsx';
+import { ConfigureInstanceDialog, ConfigureWidgetDialog } from './ConfigureWidgetDialog.tsx';
 import dashboard from './dashboard.module.css';
 import { columnTemplate } from './DashboardView.tsx';
 import styles from './editor.module.css';
@@ -18,10 +19,11 @@ import {
   removeColumn,
   removeWidget,
   resizeColumns,
+  setWidgetConfig,
   type Slot,
 } from './layout.ts';
 import { WidgetFrame } from './WidgetFrame.tsx';
-import { availableWidgets, widgetKey } from './widgets.ts';
+import { availableWidgets, needsConfig, newInstance, type AvailableWidget } from './widgets.ts';
 
 type Columns = readonly PresetColumn[];
 
@@ -40,7 +42,11 @@ export function PresetEditor({ preset, onDone }: PresetEditorProps) {
   const [adding, setAdding] = useState(false);
   const [saving, setSaving] = useState(false);
   const container = useRef<HTMLDivElement>(null);
-  const placed = new Set(columns.flatMap((column) => column.widgets.map(widgetKey)));
+  const [pending, setPending] = useState<{
+    readonly available: AvailableWidget;
+    readonly column: number;
+  } | null>(null);
+  const [configuring, setConfiguring] = useState<WidgetInstance | null>(null);
 
   const save = async (): Promise<void> => {
     setSaving(true);
@@ -97,19 +103,62 @@ export function PresetEditor({ preset, onDone }: PresetEditorProps) {
           Save
         </Button>
       </div>
-      <EditableColumns columns={columns} onChange={setColumns} container={container} />
+      <EditableColumns
+        columns={columns}
+        onChange={setColumns}
+        onConfigure={setConfiguring}
+        container={container}
+      />
       {adding ? (
         <AddWidgetDialog
-          available={availableWidgets(panels, user.role).filter(
-            (widget) => !placed.has(widgetKey(widget.ref)),
-          )}
+          available={availableWidgets(panels, user.role)}
           columns={columns.length}
-          onAdd={(ref, column) => {
-            setColumns((current) => addWidget(current, column, ref));
+          onAdd={(available, column) => {
             setAdding(false);
+            if (needsConfig(available.widget)) {
+              setPending({ available, column });
+            } else {
+              setColumns((current) =>
+                addWidget(current, column, newInstance(available.ref, available.widget)),
+              );
+            }
           }}
           onCancel={() => {
             setAdding(false);
+          }}
+        />
+      ) : null}
+      {pending ? (
+        <ConfigureWidgetDialog
+          widget={pending.available.widget}
+          title={pending.available.title}
+          stored={undefined}
+          onSave={(config) => {
+            setColumns((current) =>
+              addWidget(
+                current,
+                pending.column,
+                newInstance(pending.available.ref, pending.available.widget, config),
+              ),
+            );
+            setPending(null);
+            return Promise.resolve();
+          }}
+          onCancel={() => {
+            setPending(null);
+          }}
+        />
+      ) : null}
+      {configuring ? (
+        <ConfigureInstanceDialog
+          instance={configuring}
+          onSave={(config) => {
+            setColumns((current) => setWidgetConfig(current, configuring.id, config));
+            setConfiguring(null);
+            return Promise.resolve();
+          }}
+          onCancel={() => {
+            setConfiguring(null);
           }}
         />
       ) : null}
@@ -120,10 +169,11 @@ export function PresetEditor({ preset, onDone }: PresetEditorProps) {
 interface EditableColumnsProps {
   readonly columns: Columns;
   readonly onChange: (columns: Columns) => void;
+  readonly onConfigure: (instance: WidgetInstance) => void;
   readonly container: RefObject<HTMLDivElement | null>;
 }
 
-function EditableColumns({ columns, onChange, container }: EditableColumnsProps) {
+function EditableColumns({ columns, onChange, onConfigure, container }: EditableColumnsProps) {
   const [dragging, setDragging] = useState<Slot | null>(null);
   const [target, setTarget] = useState<number | null>(null);
 
@@ -174,13 +224,14 @@ function EditableColumns({ columns, onChange, container }: EditableColumnsProps)
               />
             ) : null}
           </div>
-          {column.widgets.map((ref, index) => (
+          {column.widgets.map((instance, index) => (
             <EditableWidget
-              key={widgetKey(ref)}
-              widgetRef={ref}
+              key={instance.id}
+              instance={instance}
               slot={{ column: columnIndex, index }}
               columns={columns}
               onChange={onChange}
+              onConfigure={onConfigure}
               onDragStart={() => {
                 setDragging({ column: columnIndex, index });
               }}
@@ -209,28 +260,29 @@ function EditableColumns({ columns, onChange, container }: EditableColumnsProps)
 }
 
 interface EditableWidgetProps {
-  readonly widgetRef: WidgetRef;
+  readonly instance: WidgetInstance;
   readonly slot: Slot;
   readonly columns: Columns;
   readonly onChange: (columns: Columns) => void;
+  readonly onConfigure: (instance: WidgetInstance) => void;
   readonly onDragStart: () => void;
   readonly onDragEnd: () => void;
   readonly onDropBefore: () => void;
 }
 
 function EditableWidget({
-  widgetRef,
+  instance,
   slot,
   columns,
   onChange,
+  onConfigure,
   onDragStart,
   onDragEnd,
   onDropBefore,
 }: EditableWidgetProps) {
-  const known = useKnownPanel(widgetRef.plugin);
-  const title =
-    known?.widgets.find((widget) => widget.id === widgetRef.widget)?.title ??
-    `${widgetRef.plugin} / ${widgetRef.widget}`;
+  const known = useKnownPanel(instance.plugin);
+  const widget = known?.widgets.find((candidate) => candidate.id === instance.widget);
+  const title = widget?.title ?? `${instance.plugin} / ${instance.widget}`;
   const count = columns[slot.column]?.widgets.length ?? 0;
   const moves = [
     {
@@ -260,7 +312,7 @@ function EditableWidget({
       draggable
       onDragStart={(event) => {
         event.dataTransfer.effectAllowed = 'move';
-        event.dataTransfer.setData('text/plain', widgetKey(widgetRef));
+        event.dataTransfer.setData('text/plain', instance.id);
         onDragStart();
       }}
       onDragEnd={onDragEnd}
@@ -273,6 +325,16 @@ function EditableWidget({
       <div className={styles.widgetHeader}>
         <GripVertical size={14} aria-hidden />
         <span>{title}</span>
+        {widget?.config ? (
+          <IconButton
+            size="sm"
+            label={`Configure ${title}`}
+            icon={Settings2}
+            onClick={() => {
+              onConfigure(instance);
+            }}
+          />
+        ) : null}
         <Menu
           label={`Move ${title}`}
           trigger={<IconButton size="sm" label={`Move ${title}`} icon={Move} />}
@@ -294,7 +356,7 @@ function EditableWidget({
         />
       </div>
       <div className={styles.widgetBody} inert>
-        <WidgetFrame widgetRef={widgetRef} />
+        <WidgetFrame instance={instance} />
       </div>
     </div>
   );

@@ -1,23 +1,21 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { defineContract } from '@petalbot/sdk';
+import { choice, defineContract } from '@petalbot/sdk';
 import { Button, definePanel } from '@petalbot/ui-sdk';
 import { apiError, modUser, pluginInfo, renderApp } from './harness.tsx';
 
-const schema = z.toJSONSchema(
-  z.object({
-    volume: z.number().min(0).max(100).default(50).describe('How loud alerts play'),
-    enabled: z.boolean().default(true),
-    mode: z.enum(['chat', 'whisper']).default('chat'),
-    greeting: z.string().max(200).optional(),
-    banned: z.array(z.string()).default([]),
-    limits: z.object({ perMinute: z.number().int().min(1).default(20) }).prefault({}),
-    either: z.union([z.string(), z.number()]).optional(),
-  }),
-  { io: 'input', unrepresentable: 'any' },
-);
+const settingsSchema = z.object({
+  volume: z.number().min(0).max(100).default(50).describe('How loud alerts play'),
+  enabled: z.boolean().default(true),
+  mode: z.enum(['chat', 'whisper']).default('chat'),
+  greeting: z.string().max(200).optional(),
+  banned: z.array(z.string()).default([]),
+  limits: z.object({ perMinute: z.number().int().min(1).default(20) }).prefault({}),
+  either: z.union([z.string(), z.number()]).optional(),
+});
+const schema = z.toJSONSchema(settingsSchema, { io: 'input', unrepresentable: 'any' });
 const values = {
   volume: 50,
   enabled: true,
@@ -26,7 +24,7 @@ const values = {
   limits: { perMinute: 20 },
   either: 3,
 };
-const quotes = defineContract({ id: 'quotes', version: '1.0.0' });
+const quotes = defineContract({ id: 'quotes', version: '1.0.0', settings: settingsSchema });
 const plainPanel = definePanel(quotes, {});
 
 function settingsRoutes(patch: (body: unknown) => unknown) {
@@ -158,5 +156,46 @@ describe('settings page', () => {
       routes: { 'GET /api/plugins/quotes/settings': () => ({ values: {}, schema: null }) },
     });
     expect(await screen.findByText('quotes has no settings.')).toBeTruthy();
+  });
+
+  it('renders choice fields as a select filled by the RPC and keeps unknown values visible', async () => {
+    const choiceSchema = z.toJSONSchema(
+      z.object({ favorite: choice('counter.options').optional() }),
+      { io: 'input' },
+    );
+    const harness = await renderApp({
+      path: '/settings/counter',
+      plugins: [pluginInfo('counter', { panel: undefined, hasPanel: false })],
+      routes: {
+        'GET /api/plugins/counter/settings': () => ({
+          values: { favorite: 'gone' },
+          schema: choiceSchema,
+        }),
+        'PATCH /api/plugins/counter/settings': ({ body }) => ({ values: body }),
+      },
+    });
+    await waitFor(() => {
+      expect(harness.socket.ofType('rpc')).toMatchObject([{ name: 'counter.options' }]);
+    });
+    act(() => {
+      harness.socket.answer('rpc', [
+        { value: 'a', label: 'Deaths' },
+        { value: 'b', label: 'Wins' },
+      ]);
+    });
+    const select = await screen.findByLabelText<HTMLSelectElement>('Favorite (optional)');
+    await waitFor(() => {
+      expect([...select.options].map((option) => option.text)).toEqual([
+        '—',
+        'Unknown: gone',
+        'Deaths',
+        'Wins',
+      ]);
+    });
+    await userEvent.selectOptions(select, 'b');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => {
+      expect(harness.requests.at(-1)).toMatchObject({ method: 'PATCH', body: { favorite: 'b' } });
+    });
   });
 });

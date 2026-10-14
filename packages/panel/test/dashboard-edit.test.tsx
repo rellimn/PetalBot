@@ -5,26 +5,31 @@ import { defineContract } from '@petalbot/sdk';
 import { definePanel } from '@petalbot/ui-sdk';
 import { pluginInfo, renderApp } from './harness.tsx';
 
-const queue = definePanel(defineContract({ id: 'queue', version: '1.0.0' }), {
-  widgets: [
-    { id: 'list', title: 'Queue', minRole: 'mod', component: () => <p>queue widget</p> },
-    {
-      id: 'stats',
-      title: 'Queue stats',
-      description: 'Waiting times',
-      component: () => <p>stats widget</p>,
+const queue = definePanel(
+  defineContract({ id: 'queue', version: '1.0.0', widgets: { list: {}, stats: {} } }),
+  {
+    widgets: {
+      list: { title: 'Queue', minRole: 'mod', component: () => <p>queue widget</p> },
+      stats: {
+        title: 'Queue stats',
+        description: 'Waiting times',
+        component: () => <p>stats widget</p>,
+      },
     },
-  ],
-});
-const timer = definePanel(defineContract({ id: 'timer', version: '1.0.0' }), {
-  widgets: [{ id: 'clock', title: 'Timer', minRole: 'mod', component: () => <p>12:30</p> }],
-});
+  },
+);
+const timer = definePanel(
+  defineContract({ id: 'timer', version: '1.0.0', widgets: { clock: {} } }),
+  {
+    widgets: { clock: { title: 'Timer', minRole: 'mod', component: () => <p>12:30</p> } },
+  },
+);
 const live = {
   id: 'p1',
   name: 'Live',
   columns: [
-    { width: 70, widgets: [{ plugin: 'queue', widget: 'list' }] },
-    { width: 30, widgets: [{ plugin: 'timer', widget: 'clock' }] },
+    { width: 70, widgets: [{ id: 'queue/list', plugin: 'queue', widget: 'list' }] },
+    { width: 30, widgets: [{ id: 'timer/clock', plugin: 'timer', widget: 'clock' }] },
   ],
   createdAt: 1,
   updatedAt: 1,
@@ -59,7 +64,6 @@ describe('editing a preset', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Remove Timer' }));
     await userEvent.click(screen.getByRole('button', { name: 'Add widget' }));
     const dialog = await screen.findByRole('dialog', { name: 'Add a widget' });
-    expect(within(dialog).queryByRole('button', { name: 'Add Queue' })).toBeNull();
     expect(within(dialog).getByText('Waiting times')).toBeTruthy();
     await userEvent.selectOptions(within(dialog).getByLabelText('Column'), '0');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Add Queue stats' }));
@@ -68,8 +72,11 @@ describe('editing a preset', () => {
       expect(lastPut(harness)?.body).toEqual({
         name: 'Live',
         columns: [
-          { width: 70, widgets: [{ plugin: 'queue', widget: 'stats' }] },
-          { width: 30, widgets: [{ plugin: 'queue', widget: 'list' }] },
+          {
+            width: 70,
+            widgets: [{ id: expect.any(String) as string, plugin: 'queue', widget: 'stats' }],
+          },
+          { width: 30, widgets: [{ id: 'queue/list', plugin: 'queue', widget: 'list' }] },
         ],
       });
     });
@@ -94,8 +101,8 @@ describe('editing a preset', () => {
       expect(lastPut(harness)?.body).toEqual({
         name: 'Live big',
         columns: [
-          { width: 49, widgets: [{ plugin: 'queue', widget: 'list' }] },
-          { width: 51, widgets: [{ plugin: 'timer', widget: 'clock' }] },
+          { width: 49, widgets: [{ id: 'queue/list', plugin: 'queue', widget: 'list' }] },
+          { width: 51, widgets: [{ id: 'timer/clock', plugin: 'timer', widget: 'clock' }] },
         ],
       });
     });

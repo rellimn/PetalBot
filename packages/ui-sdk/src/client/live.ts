@@ -3,7 +3,7 @@ import type { EventEnvelope } from '@petalbot/sdk';
 import type { ReadonlyStore } from '../store.ts';
 import type { ConnectionState } from './connection.ts';
 
-export type LiveUpdate = (data: unknown, event: EventEnvelope) => unknown;
+export type LiveUpdate = (data: unknown, event: EventEnvelope, input: unknown) => unknown;
 
 /** How a query stays live (untyped; `LiveOptions` in plugin-client.ts adds the types). */
 export interface LiveBinding {
@@ -35,13 +35,14 @@ export function liveSignature(live: LiveBinding): string {
 
 /**
  * Keeps one query live while at least one component shows it. All users of the query share one
- * binding (the first user's options count), so every event refetches or patches once.
+ * binding: the options come from the client definition, so they are the same for every user.
  */
 export function bindLiveQuery(
   queryClient: QueryClient,
   queryKey: QueryKey,
   live: LiveBinding,
   sources: LiveSources,
+  input: unknown,
 ): () => void {
   let byHash = bindings.get(queryClient);
   if (!byHash) {
@@ -52,7 +53,7 @@ export function bindLiveQuery(
   const hash = hashKey(queryKey);
   let bound = map.get(hash);
   if (!bound) {
-    bound = start(queryClient, queryKey, live, sources);
+    bound = start(queryClient, queryKey, live, sources, input);
     map.set(hash, bound);
   }
   const entry = bound;
@@ -73,6 +74,7 @@ function start(
   queryKey: QueryKey,
   live: LiveBinding,
   sources: LiveSources,
+  input: unknown,
 ): Bound {
   const find = () => queryClient.getQueryCache().find({ queryKey, exact: true });
   const refetch = (): void => {
@@ -107,7 +109,7 @@ function start(
     }
     let next: unknown;
     try {
-      next = update(query.state.data, event);
+      next = update(query.state.data, event, input);
     } catch (error) {
       console.error(
         `PetalBot: updating ${hashKey(queryKey)} from ${event.name} failed; refetching instead`,

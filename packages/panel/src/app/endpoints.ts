@@ -93,14 +93,22 @@ export const loadPreferences = async (api: Api) =>
 export const savePreferences = async (api: Api, preferences: Preferences) =>
   (await api.put('/api/me/preferences', preferences)) as Preferences;
 
+/** A widget of a plugin (as listed in "Add widget"). */
 export interface WidgetRef {
   readonly plugin: string;
   readonly widget: string;
 }
 
+/** One placed widget: an instance with its own id and config. */
+export interface WidgetInstance extends WidgetRef {
+  readonly id: string;
+  /** Stored as the form produced it (the config's input form); absent for widgets without config. */
+  readonly config?: Readonly<Record<string, unknown>>;
+}
+
 export interface PresetColumn {
   readonly width: number;
-  readonly widgets: readonly WidgetRef[];
+  readonly widgets: readonly WidgetInstance[];
 }
 
 export interface PresetInput {

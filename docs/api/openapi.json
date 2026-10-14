@@ -199,14 +199,22 @@
                   "items": {
                     "type": "object",
                     "properties": {
+                      "id": {
+                        "type": "string"
+                      },
                       "plugin": {
                         "type": "string"
                       },
                       "widget": {
                         "type": "string"
+                      },
+                      "config": {
+                        "type": "object",
+                        "additionalProperties": {}
                       }
                     },
                     "required": [
+                      "id",
                       "plugin",
                       "widget"
                     ]
@@ -258,6 +266,12 @@
                   "items": {
                     "type": "object",
                     "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "description": "Instance id, unique within the preset"
+                      },
                       "plugin": {
                         "type": "string",
                         "minLength": 1,
@@ -267,9 +281,15 @@
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 64
+                      },
+                      "config": {
+                        "type": "object",
+                        "additionalProperties": {},
+                        "description": "The instance config, validated against the widget's schema when the plugin is known"
                       }
                     },
                     "required": [
+                      "id",
                       "plugin",
                       "widget"
                     ]
@@ -1007,7 +1027,7 @@
           "me"
         ],
         "summary": "Create a preset",
-        "description": "Minimum role: mod. Only ever the logged-in user's own data. At most 20 presets per user (409 conflict).",
+        "description": "Minimum role: mod. Only ever the logged-in user's own data. At most 20 presets per user (409 conflict). Widget configs are validated against the widget's schema when the plugin is known.",
         "security": [
           {
             "session": []
@@ -1083,7 +1103,7 @@
           "me"
         ],
         "summary": "Replace a preset's name and layout",
-        "description": "Minimum role: mod. Only ever the logged-in user's own data.",
+        "description": "Minimum role: mod. Only ever the logged-in user's own data. Widget configs are validated against the widget's schema when the plugin is known.",
         "security": [
           {
             "session": []

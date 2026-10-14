@@ -1,14 +1,13 @@
 import { useState } from 'react';
 import { Button, Dialog, Field, Select } from '@petalbot/ui-sdk';
-import type { WidgetRef } from '../app/endpoints.ts';
 import styles from './editor.module.css';
 import { widgetKey, type AvailableWidget } from './widgets.ts';
 
 export interface AddWidgetDialogProps {
-  /** Widgets the user may add that are not on the preset yet. */
+  /** Widgets the user may add (the same widget can be placed several times). */
   readonly available: readonly AvailableWidget[];
   readonly columns: number;
-  readonly onAdd: (ref: WidgetRef, column: number) => void;
+  readonly onAdd: (widget: AvailableWidget, column: number) => void;
   readonly onCancel: () => void;
 }
 
@@ -21,9 +20,7 @@ export function AddWidgetDialog({ available, columns, onAdd, onCancel }: AddWidg
         if (!open) onCancel();
       }}
       title="Add a widget"
-      {...(available.length === 0
-        ? { description: 'Every widget you may use is already on this preset.' }
-        : {})}
+      {...(available.length === 0 ? { description: 'There are no widgets you may use.' } : {})}
     >
       {columns > 1 ? (
         <Field label="Column">
@@ -50,7 +47,7 @@ export function AddWidgetDialog({ available, columns, onAdd, onCancel }: AddWidg
               size="sm"
               aria-label={`Add ${widget.title}`}
               onClick={() => {
-                onAdd(widget.ref, column);
+                onAdd(widget, column);
               }}
             >
               Add

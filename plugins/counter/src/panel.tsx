@@ -1,7 +1,11 @@
 /**
- * Interim panel (M4r1): the Counters page and the widget on the M4 client API. M4r2 rewrites
- * this file for the new client (`api.counter.list.useQuery()`), the configurable `value` widget
- * and its full documentation.
+ * The counter's panel: the Counters page and the dashboard widget.
+ *
+ * Runs in the browser, loaded by the PetalBot panel. It may import the contract, the client and
+ * @petalbot/ui-sdk, never server code. Components use ui-sdk components and this file's CSS
+ * module (no Tailwind), so they follow the user's color scheme and density.
+ *
+ * Read next: src/overlays/display.tsx.
  */
 import { useState } from 'react';
 import { Hash } from 'lucide-react';
@@ -12,36 +16,36 @@ import {
   Field,
   Input,
   Numeric,
+  Spinner,
   definePanel,
-  toast,
+  type WidgetProps,
 } from '@petalbot/ui-sdk';
-import { counter } from './client.ts';
+import { api } from './client.ts';
 import { counterContract, type Counter } from './contract.ts';
 import styles from './panel.module.css';
 
-function useCounters() {
-  return counter.useRpc('counter.list', undefined, {
-    refreshOn: ['counter.changed', 'counter.listChanged'],
+/** One counter with its actions. Mutations raise their own toasts on failure. */
+function CounterRow({ counter }: { readonly counter: Counter }) {
+  const increment = api.counter.increment.useMutation({ error: 'Could not count' });
+  const reset = api.counter.reset.useMutation({ error: 'Could not reset' });
+  const remove = api.counter.remove.useMutation({
+    success: `Removed ${counter.name}`,
+    error: 'Could not remove',
   });
-}
-
-function CounterRow({ item }: { readonly item: Counter }) {
-  const increment = counter.useMutation('counter.increment');
-  const reset = counter.useMutation('counter.reset');
-  const remove = counter.useMutation('counter.remove');
   return (
     <div className={styles.row}>
-      <span className={styles.name}>{item.name}</span>
+      <span className={styles.name}>{counter.name}</span>
       <span className={styles.value}>
-        <Numeric>{item.value}</Numeric>
+        <Numeric>{counter.value}</Numeric>
       </span>
       <div className={styles.actions}>
         <Button
           variant="primary"
           size="sm"
+          aria-label={`+1 ${counter.name}`}
           loading={increment.isPending}
           onClick={() => {
-            increment.mutate({ counter: item.id });
+            increment.mutate({ counter: counter.id });
           }}
         >
           +1
@@ -50,7 +54,7 @@ function CounterRow({ item }: { readonly item: Counter }) {
           size="sm"
           loading={reset.isPending}
           onClick={() => {
-            reset.mutate({ counter: item.id });
+            reset.mutate({ counter: counter.id });
           }}
         >
           Reset
@@ -60,7 +64,7 @@ function CounterRow({ item }: { readonly item: Counter }) {
           variant="danger"
           loading={remove.isPending}
           onClick={() => {
-            remove.mutate({ counter: item.id });
+            remove.mutate({ counter: counter.id });
           }}
         >
           Remove
@@ -70,8 +74,9 @@ function CounterRow({ item }: { readonly item: Counter }) {
   );
 }
 
+/** A name field and a Create button; a duplicate name comes back as a validation error. */
 function CreateCounter() {
-  const create = counter.useMutation('counter.create');
+  const create = api.counter.create.useMutation({ error: 'Could not create the counter' });
   const [name, setName] = useState('');
   return (
     <form
@@ -83,13 +88,6 @@ function CreateCounter() {
           {
             onSuccess: () => {
               setName('');
-            },
-            onError: (error) => {
-              toast({
-                title: 'Could not create the counter',
-                description: error.message,
-                tone: 'danger',
-              });
             },
           },
         );
@@ -117,25 +115,45 @@ function CreateCounter() {
 }
 
 function CountersPage() {
-  const list = useCounters();
+  // Live through the client definition: refetched on listChanged, patched on changed.
+  const counters = api.counter.list.useQuery();
   return (
     <Card title="Counters">
-      {list.data?.length === 0 ? <EmptyState title="No counters yet" /> : null}
-      {list.data?.map((item) => (
-        <CounterRow key={item.id} item={item} />
+      {counters.isPending ? <Spinner label="Loading counters" /> : null}
+      {counters.data?.length === 0 ? <EmptyState title="No counters yet" /> : null}
+      {counters.data?.map((counter) => (
+        <CounterRow key={counter.id} counter={counter} />
       ))}
       <CreateCounter />
     </Card>
   );
 }
 
-function CountersWidget() {
-  const list = useCounters();
+/**
+ * The dashboard widget. Each placed instance has its own config: the counter picked with
+ * choice('counter.options'). The dashboard titles it "Counter · <name>" by itself.
+ */
+function CounterWidget({ config }: WidgetProps<typeof counterContract, 'value'>) {
+  const counter = api.counter.get.useQuery({ counter: config.counter });
+  const increment = api.counter.increment.useMutation({ error: 'Could not count' });
+  if (counter.isPending) return <Spinner label="Loading the counter" />;
+  // null, not an error: the counter was deleted after this widget was placed.
+  if (counter.data === null || counter.data === undefined) {
+    return <p className={styles.muted}>This counter was deleted</p>;
+  }
   return (
     <div className={styles.widget}>
-      {list.data?.map((item) => (
-        <CounterRow key={item.id} item={item} />
-      ))}
+      <span className={styles.value}>
+        <Numeric>{counter.data.value}</Numeric>
+      </span>
+      <Button
+        size="sm"
+        onClick={() => {
+          increment.mutate({ counter: config.counter });
+        }}
+      >
+        +1
+      </Button>
     </div>
   );
 }
@@ -144,13 +162,14 @@ export default definePanel(counterContract, {
   pages: [
     { path: 'counter', title: 'Counters', icon: Hash, minRole: 'mod', component: CountersPage },
   ],
-  widgets: [
-    {
-      id: 'value',
-      title: 'Counters',
-      description: 'All counters with +1 buttons',
+  // Keys must match the contract's widgets; the config type comes from there.
+  widgets: {
+    value: {
+      title: 'Counter',
+      description: 'One counter with a +1 button',
       minRole: 'mod',
-      component: CountersWidget,
+      component: CounterWidget,
     },
-  ],
+  },
+  // No custom settings form: the generated one handles `step` well enough.
 });

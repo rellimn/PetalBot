@@ -21,7 +21,10 @@ describe('counter contract', () => {
   });
 
   it('declares what the display overlay may use', () => {
-    expect(counterContract.overlays.display.events).toEqual(['counter.changed']);
+    expect(counterContract.overlays.display.events).toEqual([
+      'counter.changed',
+      'counter.listChanged',
+    ]);
     expect(counterContract.overlays.display.rpc).toEqual(['counter.get']);
   });
 });

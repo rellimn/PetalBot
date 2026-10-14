@@ -15,14 +15,15 @@ type DepsOf<O> = O extends { dependencies: infer D extends readonly ContractShap
   ? D[number]
   : never;
 /** The contracts an overlay's names come from: its own and its declared dependencies. */
-type Scope<C extends ContractShape, N extends OverlayName<C>> = C | DepsOf<OverlayOf<C, N>>;
+export type OverlayScope<C extends ContractShape, N extends OverlayName<C>> =
+  C | DepsOf<OverlayOf<C, N>>;
 type Listed<O, K extends 'events' | 'rpc'> =
   O extends Record<K, readonly (infer E extends string)[]> ? E : never;
 type ScopeEvents<C extends ContractShape, N extends OverlayName<C>> = MergeMaps<
-  EventDefsOf<Scope<C, N>>
+  EventDefsOf<OverlayScope<C, N>>
 >;
 type ScopeRpcs<C extends ContractShape, N extends OverlayName<C>> = MergeMaps<
-  RpcDefsOf<Scope<C, N>>
+  RpcDefsOf<OverlayScope<C, N>>
 >;
 
 /** The events an overlay declares, by qualified name. */
@@ -34,6 +35,18 @@ export type OverlayEvents<C extends ContractShape, N extends OverlayName<C>> = {
 export type OverlayRpcs<C extends ContractShape, N extends OverlayName<C>> = {
   [K in keyof ScopeRpcs<C, N> & Listed<OverlayOf<C, N>, 'rpc'>]: ScopeRpcs<C, N>[K];
 };
+
+/** Qualified names of the RPCs an overlay declares. */
+export type OverlayRpcName<C extends ContractShape, N extends OverlayName<C>> = keyof OverlayRpcs<
+  C,
+  N
+> &
+  string;
+/** Qualified names of the events an overlay declares. */
+export type OverlayEventName<
+  C extends ContractShape,
+  N extends OverlayName<C>,
+> = keyof OverlayEvents<C, N> & string;
 
 /** An instance's config as the component gets it: parsed, with defaults applied. */
 export type OverlayConfig<C extends ContractShape, N extends OverlayName<C>> =

@@ -1,8 +1,11 @@
 import { createRoute, type OpenAPIHono } from '@hono/zod-openapi';
 import { z } from 'zod';
+import { ValidationError } from '@petalbot/sdk';
 import type { AppDeps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
+import type { PresetInput } from '../users/schemas.ts';
 import { PresetLimitError } from '../users/user-store.ts';
+import { widgetConfigIssues } from '../users/widget-configs.ts';
 import { requireRole, type AppEnv } from './middleware.ts';
 import { SECURITY, errors, json } from './responses.ts';
 import { preferencesBody, presetBody, presetInputBody, presetListBody } from './schemas.ts';
@@ -18,6 +21,10 @@ const jsonBody = <S extends z.ZodType>(schema: S) => ({
 export function registerMeRoutes(app: OpenAPIHono<AppEnv>, deps: AppDeps): void {
   const { users } = deps;
   const missing = (id: string) => new ApiError(404, 'not_found', `Unknown preset "${id}"`);
+  const checkConfigs = (input: PresetInput, previous?: PresetInput): void => {
+    const issues = widgetConfigIssues((id) => deps.manager.cachedContract(id), input, previous);
+    if (issues.length > 0) throw new ValidationError('preset', issues);
+  };
 
   app.openapi(
     createRoute({
@@ -82,7 +89,7 @@ export function registerMeRoutes(app: OpenAPIHono<AppEnv>, deps: AppDeps): void 
       path: '/api/me/presets',
       tags: ['me'],
       summary: 'Create a preset',
-      description: `${MOD} At most 20 presets per user (409 conflict).`,
+      description: `${MOD} At most 20 presets per user (409 conflict). Widget configs are validated against the widget's schema when the plugin is known.`,
       security: SECURITY,
       request: { body: jsonBody(presetInputBody) },
       responses: {
@@ -92,6 +99,7 @@ export function registerMeRoutes(app: OpenAPIHono<AppEnv>, deps: AppDeps): void 
     }),
     (c) => {
       const session = requireRole(c, 'mod');
+      checkConfigs(c.req.valid('json'));
       try {
         return c.json(users.createPreset(session.user.id, c.req.valid('json')), 201);
       } catch (error) {
@@ -107,7 +115,7 @@ export function registerMeRoutes(app: OpenAPIHono<AppEnv>, deps: AppDeps): void 
       path: '/api/me/presets/{id}',
       tags: ['me'],
       summary: "Replace a preset's name and layout",
-      description: MOD,
+      description: `${MOD} Widget configs are validated against the widget's schema when the plugin is known.`,
       security: SECURITY,
       request: { params: presetParams, body: jsonBody(presetInputBody) },
       responses: {
@@ -118,6 +126,7 @@ export function registerMeRoutes(app: OpenAPIHono<AppEnv>, deps: AppDeps): void 
     (c) => {
       const session = requireRole(c, 'mod');
       const { id } = c.req.valid('param');
+      checkConfigs(c.req.valid('json'), users.preset(session.user.id, id));
       const preset = users.updatePreset(session.user.id, id, c.req.valid('json'));
       if (!preset) throw missing(id);
       return c.json(preset, 200);

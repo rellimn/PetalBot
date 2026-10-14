@@ -25,14 +25,31 @@ export const preferencesSchema = z.object({
 });
 export type Preferences = z.output<typeof preferencesSchema>;
 
-export const widgetRefSchema = z.object({
-  plugin: z.string().min(1).max(64),
-  widget: z.string().min(1).max(64),
-});
+/** A serialized widget config may be at most 8 KiB. */
+export const MAX_WIDGET_CONFIG_BYTES = 8 * 1024;
+
+export const widgetInstanceSchema = z
+  .object({
+    id: z.string().min(1).max(64).describe('Instance id, unique within the preset'),
+    plugin: z.string().min(1).max(64),
+    widget: z.string().min(1).max(64),
+    config: z
+      .record(z.string(), z.unknown())
+      .optional()
+      .describe(
+        "The instance config, validated against the widget's schema when the plugin is known",
+      ),
+  })
+  .refine(
+    (entry) =>
+      entry.config === undefined ||
+      new TextEncoder().encode(JSON.stringify(entry.config)).length <= MAX_WIDGET_CONFIG_BYTES,
+    { message: 'A widget config may be at most 8 KiB', path: ['config'] },
+  );
 
 export const presetColumnSchema = z.object({
   width: z.number().int().min(1).max(100).describe('Relative width of the column'),
-  widgets: z.array(widgetRefSchema).max(20),
+  widgets: z.array(widgetInstanceSchema).max(20),
 });
 
 export const presetInputSchema = z
@@ -42,12 +59,10 @@ export const presetInputSchema = z
   })
   .refine(
     (preset) => {
-      const keys = preset.columns.flatMap((column) =>
-        column.widgets.map((widget) => `${widget.plugin}\0${widget.widget}`),
-      );
-      return new Set(keys).size === keys.length;
+      const ids = preset.columns.flatMap((column) => column.widgets.map((widget) => widget.id));
+      return new Set(ids).size === ids.length;
     },
-    { message: 'A widget may appear only once per preset', path: ['columns'] },
+    { message: 'Widget instance ids must be unique within a preset', path: ['columns'] },
   );
 export type PresetInput = z.output<typeof presetInputSchema>;
 

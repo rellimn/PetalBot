@@ -43,23 +43,23 @@ const bare = defineContract({ id: 'bare', version: '1.0.0' });
 
 describe('createOverlayClient', () => {
   it('types exactly the members the overlay declares', () => {
-    const client = createOverlayClient(alerts, 'box');
-    client.useEvent('stream.follow', (event) => {
+    const client = createOverlayClient(alerts, 'box', { queries: { 'stream.recent': {} } });
+    client.stream.follow.useEvent((event) => {
       expectTypeOf(event.payload).toEqualTypeOf<{ user: string }>();
     });
-    client.useEvent('alerts.shown', () => undefined);
-    // @ts-expect-error -- stream.raid is exposed to overlays but not declared for box
-    client.useEvent('stream.raid', () => undefined);
-    expectTypeOf(client.call('stream.recent', {})).resolves.toEqualTypeOf<string[]>();
-    // @ts-expect-error -- alerts.ack belongs to the ticker overlay
-    void client.call('alerts.ack', { id: 'x' });
+    client.alerts.shown.useEvent(() => undefined);
+    // stream.raid is exposed to overlays but not declared for box
+    expectTypeOf(client.stream).not.toHaveProperty('raid');
+    expectTypeOf(client.stream.recent.call({})).resolves.toEqualTypeOf<string[]>();
+    // alerts.ack belongs to the ticker overlay
+    expectTypeOf(client.alerts).not.toHaveProperty('ack');
 
     const ticker = createOverlayClient(alerts, 'ticker');
-    expectTypeOf(ticker.call('alerts.ack', { id: 'x' })).resolves.toEqualTypeOf<
+    expectTypeOf(ticker.alerts.ack.call({ id: 'x' })).resolves.toEqualTypeOf<
       z.output<typeof alerts.rpc.ack.output>
     >();
-    // @ts-expect-error -- ticker declares no events
-    ticker.useEvent('alerts.shown', () => undefined);
+    // ticker declares no events
+    expectTypeOf(ticker.alerts).not.toHaveProperty('shown');
   });
 
   it('rejects unknown overlay names and contracts without overlays', () => {

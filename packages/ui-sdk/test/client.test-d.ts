@@ -1,136 +1,151 @@
-import { Quote } from 'lucide-react';
+import type { UseMutationResult } from '@tanstack/react-query';
 import { describe, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
-import { defineContract, Result } from '@petalbot/sdk';
+import { Choices, Result, defineContract } from '@petalbot/sdk';
 import type { ClientError } from '../src/client/errors.ts';
 import { createPluginClient } from '../src/client/plugin-client.ts';
-import { definePanel } from '../src/panel.ts';
 
+const Counter = z.object({ id: z.string(), name: z.string(), value: z.number().int() });
+const Ref = z.object({ counter: z.string() });
+const counter = defineContract({
+  id: 'counter',
+  version: '2.0.0',
+  events: {
+    changed: {
+      schema: z.object({ counter: z.string(), value: z.number(), by: z.string() }),
+      expose: ['panel', 'overlay'],
+    },
+    listChanged: { schema: z.object({}), expose: ['panel'] },
+    internal: { schema: z.object({}) },
+  },
+  rpc: {
+    list: { output: z.array(Counter), expose: { panel: 'mod' } },
+    options: { output: Choices, expose: { panel: 'mod' } },
+    get: { input: Ref, output: Counter.nullable(), expose: { panel: 'mod', overlay: true } },
+    increment: {
+      input: Ref,
+      output: Result(z.object({ counter: Counter })),
+      expose: { panel: 'mod' },
+    },
+    create: { input: z.object({ name: z.string() }), output: Counter, expose: { panel: 'owner' } },
+    hidden: { output: z.string() },
+  },
+});
 const chat = defineContract({
   id: 'chat',
   version: '1.0.0',
-  events: {
-    message: { schema: z.object({ text: z.string() }), expose: ['panel'] },
-    secret: { schema: z.object({}) },
-    overlayOnly: { schema: z.object({}), expose: ['overlay'] },
-  },
+  events: { message: { schema: z.object({ text: z.string() }), expose: ['panel'] } },
   rpc: {
     send: {
       input: z.object({ text: z.string() }),
-      output: Result(z.object({ messageId: z.string() })),
+      output: z.object({ id: z.string() }),
       expose: { panel: 'mod' },
     },
-    internal: { input: z.object({}), output: z.object({}) },
-    ovl: { input: z.object({}), output: z.object({}), expose: { overlay: true } },
   },
 });
 
-const quotes = defineContract({
-  id: 'quotes',
-  version: '1.0.0',
-  events: {
-    added: {
-      schema: z.object({ id: z.string(), at: z.coerce.date() }),
-      expose: ['panel', 'overlay'],
-    },
-  },
-  rpc: {
-    list: {
-      input: z.object({ limit: z.number().default(10) }),
-      output: z.array(z.string()),
-      expose: { panel: 'owner' },
-    },
-  },
-});
+interface CounterRow {
+  id: string;
+  name: string;
+  value: number;
+}
 
-const bare = defineContract({ id: 'bare', version: '1.0.0' });
-
-describe('createPluginClient', () => {
-  it('types only panel-exposed members of the contract and its dependencies', () => {
-    const client = createPluginClient(quotes, [chat]);
-    expectTypeOf(client.pluginId).toEqualTypeOf<string>();
-    client.useEvent('quotes.added', (event) => {
-      expectTypeOf(event.payload).toEqualTypeOf<{ id: string; at: Date }>();
-      expectTypeOf(event.name).toEqualTypeOf<'quotes.added'>();
-    });
-    client.useEvent('chat.message', (event) => {
-      expectTypeOf(event.payload).toEqualTypeOf<{ text: string }>();
-    });
-    // @ts-expect-error -- not exposed
-    client.useEvent('chat.secret', () => undefined);
-    // @ts-expect-error -- exposed to overlays only
-    client.useEvent('chat.overlayOnly', () => undefined);
-
-    const list = client.useRpc('quotes.list', {});
-    expectTypeOf(list.data).toEqualTypeOf<string[] | undefined>();
-    expectTypeOf(list.error).toEqualTypeOf<ClientError | null>();
-    const send = client.useMutation('chat.send');
-    expectTypeOf(send.mutate).parameter(0).toEqualTypeOf<{ text: string }>();
-    // @ts-expect-error -- not exposed
-    void client.call('chat.internal', {});
-    // @ts-expect-error -- exposed to overlays only
-    void client.call('chat.ovl', {});
-    // @ts-expect-error -- wrong input
-    void client.call('chat.send', { text: 1 });
-    expectTypeOf(client.call('chat.send', { text: 'x' })).resolves.toEqualTypeOf<
-      | { ok: true; messageId: string }
-      | {
-          ok: false;
-          reason: 'unsupported' | 'forbidden' | 'not-found' | 'rate-limited' | 'platform-error';
-          message: string;
-        }
-    >();
-  });
-
-  it('works without dependencies and for contracts with nothing exposed', () => {
-    const none = createPluginClient(bare);
-    // @ts-expect-error -- nothing is exposed
-    none.useEvent('bare.x', () => undefined);
-    const own = createPluginClient(quotes);
-    own.useEvent('quotes.added', () => undefined);
-    // @ts-expect-error -- not a declared dependency
-    own.useEvent('chat.message', () => undefined);
-  });
-
-  it('types live options from the client events and the RPC output', () => {
-    const client = createPluginClient(quotes, [chat]);
-    client.useRpc(
-      'quotes.list',
-      {},
-      {
-        refreshOn: ['chat.message'],
-        update: {
-          'quotes.added': (ids, event) => {
-            expectTypeOf(ids).toEqualTypeOf<string[]>();
-            expectTypeOf(event.payload).toEqualTypeOf<{ id: string; at: Date }>();
-            return [...ids, event.payload.id];
-          },
+const api = createPluginClient(counter, {
+  dependencies: [chat],
+  queries: {
+    'counter.list': { refreshOn: ['counter.listChanged'] },
+    'counter.options': {},
+    'counter.get': {
+      update: {
+        'counter.changed': (data, event, input) => {
+          expectTypeOf(data).toEqualTypeOf<CounterRow | null>();
+          expectTypeOf(event.payload).toEqualTypeOf<{
+            counter: string;
+            value: number;
+            by: string;
+          }>();
+          expectTypeOf(input).toEqualTypeOf<{ counter: string }>();
+          return data?.id === event.payload.counter
+            ? { ...data, value: event.payload.value }
+            : data;
         },
       },
-    );
-    // @ts-expect-error -- not exposed to the panel
-    client.useRpc('quotes.list', {}, { refreshOn: ['chat.secret'] });
-    client.useRpc(
-      'quotes.list',
-      {},
-      {
-        // @ts-expect-error -- must return the RPC's output type
-        update: { 'chat.message': () => 1 },
-      },
-    );
-  });
+    },
+  },
+  mutations: { 'counter.create': { invalidates: ['counter.list'] } },
 });
 
-describe('definePanel', () => {
-  it('accepts lucide icons and components and rejects bad roles', () => {
-    const Page = () => null;
-    definePanel(quotes, {
-      pages: [{ path: 'list', title: 'Quotes', icon: Quote, minRole: 'mod', component: Page }],
-      widgets: [{ id: 'latest', title: 'Latest quote', component: Page }],
+/** Hooks must be called in a component; type tests only need it to compile. */
+export function Uses() {
+  const list = api.counter.list.useQuery();
+  expectTypeOf(list.data).toEqualTypeOf<CounterRow[] | undefined>();
+  expectTypeOf(list.error).toEqualTypeOf<ClientError | null>();
+  api.counter.list.useQuery({ enabled: false });
+  const one = api.counter.get.useQuery({ counter: 'a' }, { refetchInterval: 1000 });
+  expectTypeOf(one.data).toEqualTypeOf<CounterRow | null | undefined>();
+  const increment = api.counter.increment.useMutation({ error: 'Could not count' });
+  increment.mutate({ counter: 'a' });
+  expectTypeOf(api.counter.create.useMutation()).toEqualTypeOf<
+    UseMutationResult<CounterRow, ClientError, { name: string }>
+  >();
+  api.chat.send.useMutation().mutate({ text: 'hi' });
+  api.counter.changed.useEvent((event) => {
+    expectTypeOf(event.payload.by).toEqualTypeOf<string>();
+    expectTypeOf(event.name).toEqualTypeOf<'counter.changed'>();
+  });
+  api.chat.message.useEvent((event) => {
+    expectTypeOf(event.payload.text).toEqualTypeOf<string>();
+  });
+  // @ts-expect-error -- increment is not a query
+  api.counter.increment.useQuery({ counter: 'a' }); // eslint-disable-line @typescript-eslint/no-unsafe-call -- the intended error
+  // @ts-expect-error -- list is a query, not a mutation
+  api.counter.list.useMutation(); // eslint-disable-line @typescript-eslint/no-unsafe-call -- the intended error
+  expectTypeOf(api.counter).not.toHaveProperty('hidden');
+  expectTypeOf(api.counter).not.toHaveProperty('internal');
+  // @ts-expect-error -- get needs its input
+  api.counter.get.useQuery();
+  // @ts-expect-error -- list takes no input
+  api.counter.list.useQuery({ counter: 'a' });
+  return null;
+}
+
+describe('createPluginClient', () => {
+  it('calls RPCs outside components with typed results', () => {
+    expectTypeOf(api.counter.list.call()).resolves.toEqualTypeOf<CounterRow[]>();
+    expectTypeOf(
+      api.counter.get.call({ counter: 'a' }),
+    ).resolves.toEqualTypeOf<CounterRow | null>();
+    // @ts-expect-error -- wrong input
+    void api.chat.send.call({ text: 1 });
+  });
+
+  it('rejects definitions that name the wrong things', () => {
+    createPluginClient(counter, {
+      queries: {
+        // @ts-expect-error -- not a panel RPC
+        'counter.hidden': {},
+      },
     });
-    definePanel(quotes, {
-      // @ts-expect-error -- not a role
-      pages: [{ path: 'list', title: 'Quotes', minRole: 'viewer', component: Page }],
+    createPluginClient(counter, {
+      // @ts-expect-error -- unknown event
+      queries: { 'counter.list': { refreshOn: ['counter.nope'] } },
     });
+    createPluginClient(counter, {
+      queries: { 'counter.list': {} },
+      // @ts-expect-error -- invalidates only names queries
+      mutations: { 'counter.create': { invalidates: ['counter.get'] } },
+    });
+    createPluginClient(counter, {
+      queries: {
+        // @ts-expect-error -- update must return the RPC's output
+        'counter.list': { update: { 'counter.listChanged': () => 1 } },
+      },
+    });
+  });
+
+  it('treats every RPC as a mutation without a definition', () => {
+    const bare = createPluginClient(counter);
+    expectTypeOf(bare.counter.list).toHaveProperty('useMutation');
+    expectTypeOf(bare).not.toHaveProperty('chat');
   });
 });

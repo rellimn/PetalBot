@@ -129,7 +129,16 @@ export const presetBody = z
     columns: z.array(
       z.object({
         width: z.number().int(),
-        widgets: z.array(z.object({ plugin: z.string(), widget: z.string() })).readonly(),
+        widgets: z
+          .array(
+            z.object({
+              id: z.string(),
+              plugin: z.string(),
+              widget: z.string(),
+              config: z.record(z.string(), z.unknown()).optional(),
+            }),
+          )
+          .readonly(),
       }),
     ),
     createdAt: z.number(),

@@ -1,3 +1,5 @@
+import { CHOICE_META_KEY } from '@petalbot/sdk';
+
 type Json = Readonly<Record<string, unknown>>;
 
 interface FieldBase {
@@ -25,6 +27,7 @@ export type FieldSpec =
     })
   | (FieldBase & { readonly kind: 'boolean' })
   | (FieldBase & { readonly kind: 'enum'; readonly options: readonly (string | number)[] })
+  | (FieldBase & { readonly kind: 'choice'; readonly rpc: string })
   | (FieldBase & { readonly kind: 'list'; readonly item: 'string' | 'number' | 'integer' })
   | (FieldBase & { readonly kind: 'object'; readonly fields: readonly FieldSpec[] })
   | (FieldBase & { readonly kind: 'unsupported'; readonly reason: string });
@@ -76,6 +79,8 @@ function fieldOf(key: string, schema: Json, path: readonly string[], required: b
   };
   const unsupported = (reason: string): FieldSpec => ({ ...base, kind: 'unsupported', reason });
 
+  const rpc = schema[CHOICE_META_KEY];
+  if (typeof rpc === 'string') return { ...base, kind: 'choice', rpc };
   if (Array.isArray(schema.enum)) {
     const options = schema.enum.filter(
       (option): option is string | number =>

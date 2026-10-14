@@ -190,68 +190,59 @@ second copy of `@tanstack/react-query`; use the clients below.
 ## Panel entry: `definePanel`
 
 ```tsx
-// src/client.ts: module scope, not inside a component
-export const quotes = createPluginClient(quotesContract, [chatContract]);
-
 // src/panel.tsx
 import { Quote } from 'lucide-react';
-import { definePanel } from '@petalbot/ui-sdk';
+import { definePanel, type WidgetProps } from '@petalbot/ui-sdk';
+
+function LatestQuote({ config }: WidgetProps<typeof quotesContract, 'latest'>) { … }
 
 export default definePanel(quotesContract, {
   pages: [{ path: 'list', title: 'Quotes', icon: Quote, minRole: 'mod', component: QuotesPage }],
-  widgets: [{ id: 'latest', title: 'Latest quote', minRole: 'mod', component: LatestQuote }],
+  // One entry per widget the contract declares (`widgets` in the contract), keyed by its id.
+  widgets: {
+    latest: { title: 'Latest quote', minRole: 'mod', component: LatestQuote },
+  },
   settings: CustomSettingsForm, // optional; otherwise the panel generates a form
 });
 ```
 
-| Field          | Meaning                                                                                             |
-| -------------- | --------------------------------------------------------------------------------------------------- |
-| `pages[].path` | URL under `/p/<pluginId>/`, lower-case segments, e.g. `list` or `list/archive`.                     |
-| `pages[].icon` | A component such as a `lucide-react` icon (only the icons you import are bundled).                  |
-| `minRole`      | `'owner'` (default) or `'mod'`, for pages and widgets. The server still checks every RPC.           |
-| `widgets[].id` | `^[a-z][a-z0-9-]*$`, unique in the plugin; dashboard presets store it.                              |
-| `settings`     | `({ values, schema, save }) => …`; `save(patch)` rejects with `ApiError` (`issues` for validation). |
+| Field          | Meaning                                                                                                                                                                                                                        |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pages[].path` | URL under `/p/<pluginId>/`, lower-case segments, e.g. `list` or `list/archive`.                                                                                                                                                |
+| `pages[].icon` | A component such as a `lucide-react` icon (only the icons you import are bundled).                                                                                                                                             |
+| `minRole`      | `'owner'` (default) or `'mod'`, for pages and widgets. The server still checks every RPC.                                                                                                                                      |
+| `widgets`      | Keys must equal the contract's widget ids; a mismatch is a compile error and fails at load. The component gets `WidgetProps` (`{ config, instanceId }`); an optional `configure` component replaces the generated config form. |
+| `settings`     | A component with `SettingsFormProps<typeof contract>` (`values`, `schema`, `save(patch)`); `save` rejects with `ApiError` (`issues` for validation).                                                                           |
 
 Pages and widgets render inside an error boundary. While the plugin is stopped, pages show
-"not running" and widgets a placeholder; both come back by themselves.
+"not running" and widgets a placeholder; both come back by themselves. Widget instances, their
+configure dialog, "Needs configuration" and the title suffix are described in
+`docs/api/ui-sdk.md` (Widgets and settings).
 
 ## Panel client: `createPluginClient`
 
-```tsx
-function QuotesPage() {
-  // TanStack query: data, isPending, error, refetch. refreshOn refetches on these events.
-  const list = quotes.useRpc('quotes.list', {}, { refreshOn: ['quotes.added'] });
-  const add = quotes.useMutation('quotes.add'); // mutate(input), isPending, error
-  return <Button onClick={() => add.mutate({ text: 'hi' })}>Add</Button>;
-}
-await quotes.call('quotes.add', { text: 'hi' }); // also outside components
-```
+The client is described in `docs/api/ui-sdk.md` (Client). The counter's `src/client.ts` is the
+worked example:
 
-Only events with `expose: ['panel', …]` and RPCs with `expose.panel` of the plugin's own contract
-and of the contracts passed as dependencies are typed; anything else is a compile error. Create the
-client at module scope: the React Compiler refuses hooks that come out of another hook's result.
-
-**Live queries.** `refreshOn` refetches a query when one of the events arrives. For busy events,
-`update` patches the cached result from the event payload without a round trip:
-
-```tsx
-const recent = chat.useRpc(
-  'chat.recent',
-  { limit: 50 },
-  {
-    update: { 'chat.message': (messages, event) => [...messages, event.payload].slice(-50) },
+```ts
+export const api = createPluginClient(counterContract, {
+  queries: {
+    'counter.list': { refreshOn: ['counter.listChanged'] },
+    'counter.get': {
+      refreshOn: ['counter.listChanged'],
+      update: {
+        'counter.changed': (data, event, input) =>
+          data !== null && event.payload.counter === input.counter
+            ? { ...data, value: event.payload.value }
+            : data,
+      },
+    },
   },
-);
+  mutations: { 'counter.increment': { invalidates: [] } },
+});
 ```
 
-- An `update` runs only when the query has data and no fetch is in flight. During a fetch, an
-  event (in `refreshOn` or `update`) makes the query fetch once more after the current fetch;
-  fetches are never cancelled. An `update` that throws is logged and refetches.
-- Live queries refetch after a reconnect and when they are shown again, because events that arrive
-  while nothing listens are lost.
-- All components showing the same query (same name and input) share one binding, so each event
-  refetches or patches once. Give them the same options; the first one's count. An event in both
-  options is handled by `update`. Keep `update` functions pure: they get `(data, event)` only.
+Create the client at module scope: the React Compiler needs the hooks behind it to stay the same.
 
 **Where state lives.** Data the server owns (values, queues, recent events) lives in the plugin's
 server code and reaches the panel through live queries. Buffers built from events also belong on
@@ -287,7 +278,8 @@ const box = createOverlayClient(alertsContract, 'box'); // module scope, like cr
 
 function AlertBox({ config }: OverlayProps<OverlayConfig<typeof alertsContract, 'box'>>) {
   const [text, setText] = useState<string | null>(null);
-  box.useEvent('stream.follow', (event) => {
+  // An occurrence, not state: useEvent. Displayed state would use box.<id>.<rpc>.useQuery().
+  box.stream.follow.useEvent((event) => {
     setText(`${event.payload.user} followed`);
     setTimeout(() => setText(null), config.durationMs);
   });
@@ -297,9 +289,10 @@ function AlertBox({ config }: OverlayProps<OverlayConfig<typeof alertsContract, 
 export default defineOverlay(alertsContract, 'box', { component: AlertBox });
 ```
 
-- **Client:** `createOverlayClient(contract, name)` types exactly the events and RPCs the
-  declaration lists (anything else is a compile error), with the same `useEvent`, `useRpc`,
-  `useMutation` and `call` as the panel client. The server enforces the same list.
+- **Client:** `createOverlayClient(contract, name, { queries, mutations })` has exactly the events
+  and RPCs the declaration lists (anything else is a compile error), with the same handles as
+  the panel client (`box.<id>.<member>.useQuery/useMutation/call/useEvent`). The server enforces
+  the same list.
 - **Config:** the component gets `config`, parsed with the declaration's schema in the browser,
   so defaults are applied. It re-renders when the owner changes the instance's config. A stored
   config that no longer fits the schema renders nothing (and logs to the console).
@@ -368,3 +361,8 @@ await harness.stop();
 `createTestHarness` (from `@petalbot/testing`) runs the plugin in a real Kernel on an in-memory database, with its dependencies replaced by typed fakes.
 
 Plugins with a `db` get their real migrations. The harness finds the plugin folder from the running test file (the nearest `package.json` with a `petalbot` field); pass `{ dir }` when the test lives elsewhere.
+
+UI code is tested with `renderPluginUi(ui)` from `@petalbot/testing/ui`. It renders a page, a
+widget or an overlay component against a fake server, which the test drives with
+`server.answer(rpc, result)`, `server.fail(rpc, code, message)`, `server.emit(event, payload)` and
+`server.calls(rpc)`. Mark such test files with `// @vitest-environment happy-dom`.

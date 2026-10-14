@@ -1,4 +1,4 @@
-import type { PresetColumn, WidgetRef } from '../app/endpoints.ts';
+import type { PresetColumn, WidgetInstance } from '../app/endpoints.ts';
 
 export const MAX_COLUMNS = 3;
 /** Smallest column width in percent while editing. */
@@ -45,10 +45,26 @@ export function removeWidget(columns: Columns, slot: Slot): PresetColumn[] {
   );
 }
 
-export function addWidget(columns: Columns, column: number, ref: WidgetRef): PresetColumn[] {
+export function addWidget(
+  columns: Columns,
+  column: number,
+  instance: WidgetInstance,
+): PresetColumn[] {
   return columns.map((current, index) =>
-    index === column ? { ...current, widgets: [...current.widgets, ref] } : current,
+    index === column ? { ...current, widgets: [...current.widgets, instance] } : current,
   );
+}
+
+/** Replaces the config of the instance `id`. */
+export function setWidgetConfig(
+  columns: Columns,
+  id: string,
+  config: Readonly<Record<string, unknown>>,
+): PresetColumn[] {
+  return columns.map((column) => ({
+    ...column,
+    widgets: column.widgets.map((widget) => (widget.id === id ? { ...widget, config } : widget)),
+  }));
 }
 
 /** Appends an empty column with an average share; at most MAX_COLUMNS. */

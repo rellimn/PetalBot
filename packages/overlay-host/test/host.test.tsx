@@ -33,7 +33,7 @@ const display = createOverlayClient(counter, 'display');
 
 function Display({ config }: OverlayProps<OverlayConfig<typeof counter, 'display'>>) {
   const [value, setValue] = useState(0);
-  display.useEvent('counter.changed', (event) => {
+  display.counter.changed.useEvent((event) => {
     setValue(event.payload.value);
   });
   return (

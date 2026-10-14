@@ -6,7 +6,7 @@ import { MAX_PRESETS, type PresetInput } from '../../src/server/users/schemas.ts
 const layout: PresetInput = {
   name: 'Live',
   columns: [
-    { width: 70, widgets: [{ plugin: 'queue', widget: 'list' }] },
+    { width: 70, widgets: [{ id: 'w1', plugin: 'queue', widget: 'list' }] },
     { width: 30, widgets: [] },
   ],
 };
@@ -77,5 +77,28 @@ describe('UserStore', () => {
     for (let index = 0; index < MAX_PRESETS; index += 1) store.createPreset('a', layout);
     expect(() => store.createPreset('a', layout)).toThrow(PresetLimitError);
     expect(store.createPreset('b', layout).name).toBe('Live');
+  });
+  it('gives stored widgets without an instance id the id plugin/widget', () => {
+    const { sqlite, store } = setup();
+    const created = store.createPreset('u', {
+      name: 'x',
+      columns: [{ width: 1, widgets: [{ id: 'kept', plugin: 'q', widget: 'w' }] }],
+    });
+    sqlite.prepare('UPDATE petalbot_presets SET columns = ? WHERE id = ?').run(
+      JSON.stringify([
+        {
+          width: 1,
+          widgets: [
+            { plugin: 'q', widget: 'w' },
+            { plugin: 'r', widget: 'v' },
+          ],
+        },
+      ]),
+      created.id,
+    );
+    expect(store.preset('u', created.id)?.columns[0]?.widgets).toEqual([
+      { id: 'q/w', plugin: 'q', widget: 'w' },
+      { id: 'r/v', plugin: 'r', widget: 'v' },
+    ]);
   });
 });

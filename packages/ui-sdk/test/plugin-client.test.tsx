@@ -4,8 +4,8 @@ import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { defineContract } from '@petalbot/sdk';
-import { createPluginClient } from '../src/client/plugin-client.ts';
 import { useConnectionStatus, usePlugins, useUser } from '../src/client/context.tsx';
+import { createPluginClient } from '../src/client/plugin-client.ts';
 import { renderWithPetal } from './render.tsx';
 
 const quotesContract = defineContract({
@@ -13,22 +13,38 @@ const quotesContract = defineContract({
   version: '1.0.0',
   events: { added: { schema: z.object({ text: z.string() }), expose: ['panel'] } },
   rpc: {
-    list: { input: z.object({}), output: z.array(z.string()), expose: { panel: 'mod' } },
+    list: { output: z.array(z.string()), expose: { panel: 'mod' } },
+    find: { input: z.object({ text: z.string() }), output: z.string(), expose: { panel: 'mod' } },
     add: {
       input: z.object({ text: z.string() }),
       output: z.object({ id: z.string() }),
       expose: { panel: 'mod' },
     },
+    secret: { output: z.string() },
   },
 });
-const quotes = createPluginClient(quotesContract);
+const api = createPluginClient(quotesContract, {
+  queries: { 'quotes.list': {}, 'quotes.find': {} },
+});
+
+const event = (text: string) => ({
+  type: 'event',
+  envelope: {
+    id: text,
+    name: 'quotes.added',
+    payload: { text },
+    source: 'quotes',
+    timestamp: 1,
+    depth: 0,
+  },
+});
 
 function QuotesPage() {
-  const list = quotes.useRpc('quotes.list', {});
-  const add = quotes.useMutation('quotes.add');
+  const list = api.quotes.list.useQuery();
+  const add = api.quotes.add.useMutation();
   const [last, setLast] = useState('none');
-  quotes.useEvent('quotes.added', (event) => {
-    setLast(event.payload.text);
+  api.quotes.added.useEvent((received) => {
+    setLast(received.payload.text);
   });
   return (
     <div>
@@ -48,11 +64,20 @@ function QuotesPage() {
 }
 
 describe('createPluginClient', () => {
-  it('queries, mutates and listens through the shared connection', async () => {
+  it('builds one namespace per contract with only panel-exposed members', () => {
+    expect(Object.keys(api)).toEqual(['quotes']);
+    expect(Object.keys(api.quotes).toSorted()).toEqual(['add', 'added', 'find', 'list']);
+    expect(Object.keys(api.quotes.list).toSorted()).toEqual(['call', 'useQuery']);
+    expect(Object.keys(api.quotes.add).toSorted()).toEqual(['call', 'useMutation']);
+    expect(Object.keys(api.quotes.added)).toEqual(['useEvent']);
+  });
+
+  it('queries without input, mutates and listens through the shared connection', async () => {
     const { socket, unmount } = renderWithPetal(<QuotesPage />);
     await waitFor(() => {
-      expect(socket.ofType('rpc')).toMatchObject([{ name: 'quotes.list', input: {} }]);
+      expect(socket.ofType('rpc')).toMatchObject([{ name: 'quotes.list' }]);
     });
+    expect(socket.ofType('rpc')[0]).not.toHaveProperty('input');
     act(() => {
       socket.answer('rpc', ['a', 'b'], (message) => message.name === 'quotes.list');
     });
@@ -60,17 +85,7 @@ describe('createPluginClient', () => {
 
     expect(socket.ofType('subscribe')).toMatchObject([{ event: 'quotes.added' }]);
     act(() => {
-      socket.receive({
-        type: 'event',
-        envelope: {
-          id: '1',
-          name: 'quotes.added',
-          payload: { text: 'hello' },
-          source: 'quotes',
-          timestamp: 1,
-          depth: 0,
-        },
-      });
+      socket.receive(event('hello'));
     });
     expect(screen.getByText('last: hello')).toBeTruthy();
 
@@ -90,17 +105,39 @@ describe('createPluginClient', () => {
     expect(socket.ofType('unsubscribe')).toMatchObject([{ event: 'quotes.added' }]);
   });
 
-  it('remembers its dependency ids', () => {
-    const chatContract = defineContract({ id: 'chat', version: '1.0.0' });
-    expect(createPluginClient(quotesContract, [chatContract]).dependencies).toEqual(['chat']);
-    expect(quotes.dependencies).toEqual([]);
+  it('passes input and per-use options to useQuery', async () => {
+    function Find() {
+      const [enabled, setEnabled] = useState(false);
+      const found = api.quotes.find.useQuery({ text: 'x' }, { enabled });
+      return (
+        <button
+          type="button"
+          onClick={() => {
+            setEnabled(true);
+          }}
+        >
+          found: {found.data ?? '-'}
+        </button>
+      );
+    }
+    const { socket } = renderWithPetal(<Find />);
+    await screen.findByText('found: -');
+    expect(socket.ofType('rpc')).toEqual([]);
+    await userEvent.click(screen.getByRole('button', { name: 'found: -' }));
+    await waitFor(() => {
+      expect(socket.ofType('rpc')).toMatchObject([{ name: 'quotes.find', input: { text: 'x' } }]);
+    });
   });
 
   it('calls outside components through the registered connection', async () => {
     const { socket } = renderWithPetal(<p>idle</p>);
-    const pending = quotes.call('quotes.add', { text: 'x' });
+    const pending = api.quotes.add.call({ text: 'x' });
     socket.answer('rpc', { id: 'q2' });
     await expect(pending).resolves.toEqual({ id: 'q2' });
+    const listed = api.quotes.list.call();
+    expect(socket.ofType('rpc').at(-1)).toMatchObject({ name: 'quotes.list' });
+    socket.answer('rpc', []);
+    await expect(listed).resolves.toEqual([]);
   });
 
   it('exposes the user, the connection status and the plugin list', () => {

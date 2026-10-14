@@ -29,12 +29,12 @@ const alerts = defineContract({
     },
   },
 });
-const box = createOverlayClient(alerts, 'box');
+const box = createOverlayClient(alerts, 'box', { queries: { 'alerts.recent': {} } });
 
 function Box() {
-  const recent = box.useRpc('alerts.recent', {});
+  const recent = box.alerts.recent.useQuery({});
   const [last, setLast] = useState('nobody');
-  box.useEvent('stream.follow', (event) => {
+  box.stream.follow.useEvent((event) => {
     setLast(event.payload.user);
   });
   return (
@@ -45,9 +45,10 @@ function Box() {
 }
 
 describe('createOverlayClient', () => {
-  it('knows its plugin and the overlay dependencies', () => {
-    expect(box.pluginId).toBe('alerts');
-    expect(box.dependencies).toEqual(['stream']);
+  it('has namespaces for the own contract and the overlay dependencies, limited to the declaration', () => {
+    expect(Object.keys(box).toSorted()).toEqual(['alerts', 'stream']);
+    expect(Object.keys(box.alerts)).toEqual(['recent']);
+    expect(Object.keys(box.stream)).toEqual(['follow']);
   });
 
   it('works under a ConnectionProvider, without a panel session', async () => {

@@ -4,22 +4,89 @@ Everything panel and overlay code needs: a typed client, React hooks, components
 
 ## Client
 
-| Export                                                | Purpose                                                                                                                                                              |
-| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createPluginClient(contract, deps?)`                 | Typed `useEvent`, `useRpc`, `useMutation`, `call` (see plugin-api.md).                                                                                               |
-| `createOverlayClient(contract, name)`                 | The same for an overlay: only the events and RPCs its declaration lists.                                                                                             |
-| `defineOverlay(contract, name, { component })`        | Default export of `src/overlays/<name>.tsx`; the component gets `{ config }` (`OverlayProps`).                                                                       |
-| `OverlayConfig<typeof contract, 'name'>`              | The parsed config type of an overlay (defaults applied).                                                                                                             |
-| `ConnectionProvider`                                  | Provides only the connection (the overlay host uses it); `PetalProvider` includes it.                                                                                |
-| `usePlugins()`, `usePlugin(id)`, `usePluginsLoaded()` | Live `PluginInfo` of every plugin.                                                                                                                                   |
-| `useUser()`                                           | `{ id, name, role }` of the logged-in user.                                                                                                                          |
-| `useConnectionStatus()`                               | `'connecting' \| 'open' \| 'reconnecting' \| 'ended'`.                                                                                                               |
-| `useConnection().state`                               | `ReadonlyStore` of `{ status, plugins, pluginsLoaded, problems }` for `useStore` or `subscribe`.                                                                     |
-| `useApi()`                                            | JSON over HTTP (`get/post/put/patch/delete`, results are `unknown`), e.g. for `/api/p/<id>/…` routes.                                                                |
-| `toast(input)`, `useToast()`                          | `toast({ title, description?, tone?: 'info' \| 'success' \| 'warning' \| 'danger', durationMs? })`, also outside components. `useToast()` returns the same function. |
-| `ClientError`, `ApiError`                             | Error classes (`code`, `message`; `ApiError` also `status`, `plugins`, `issues`).                                                                                    |
+```ts
+// src/client.ts: once, at module scope
+export const api = createPluginClient(counterContract, {
+  dependencies: [chatContract],
+  queries: {
+    'counter.list': { refreshOn: ['counter.listChanged'] },
+    'counter.get': {
+      update: {
+        'counter.changed': (data, event, input) =>
+          data !== null && event.payload.counter === input.counter
+            ? { ...data, value: event.payload.value }
+            : data,
+      },
+    },
+  },
+  mutations: { 'counter.increment': { invalidates: [] } },
+});
+
+// components
+const list = api.counter.list.useQuery(); // RPC without input
+const one = api.counter.get.useQuery({ counter: id }, { enabled: open });
+const increment = api.counter.increment.useMutation({ error: 'Could not count' });
+increment.mutate({ counter: id });
+await api.chat.send.call({ text: 'hi' }); // also outside components
+api.counter.changed.useEvent((event) => playSound());
+```
+
+- **Shape:** `api.<contractId>.<member>` mirrors the qualified name. There's one namespace for the own contract and one per dependency, with only the members the client may use: for the panel, RPCs with `expose.panel` and events exposed to `panel`; for an overlay, what its declaration lists.
+- **Read or write:** RPCs listed in `queries` get `useQuery(input?, { enabled, refetchInterval })` (a TanStack query). All other RPCs get `useMutation({ success?, error? })` (a TanStack mutation; `mutate()` takes no argument for RPCs without input). Every RPC has `call(input?)`, and every event has `useEvent(handler)`.
+- **Freshness is declared once per client, not per component:**
+
+| Option                                            | On the event                           | Round trip | Good for                                             |
+| ------------------------------------------------- | -------------------------------------- | ---------- | ---------------------------------------------------- |
+| `refreshOn: [events]`                             | refetches the query (payload ignored)  | yes        | the default; lists; payloads without the full answer |
+| `update: { event: (data, event, input) => next }` | computes the new data from the payload | none       | busy streams, payloads that carry the new value      |
+
+`update` runs once per cached entry (one per input); `input` is that entry's input. Return `data` unchanged when the event doesn't concern the entry, and a new object when it does (never mutate). It only runs when the entry has data and no fetch is in flight; otherwise the query refetches. Live queries refetch after a reconnect.
+
+- **Invalidation:** after a successful mutation, every query of the client's own contract is refetched in this tab. `mutations: { name: { invalidates: [...] } }` replaces that list, and `[]` turns it off. Other tabs, users and overlays only learn about changes through events, so state that others display must be announced with an event.
+- **Toasts:** `success` and `error` (a string or a function) raise a toast. The error's message, or a failed `Result`'s message, becomes the description. A result shaped like a failed `Result` (`{ ok: false, message }`) counts as an error for toasts, while TanStack's `isSuccess` stays true.
+- **Query for what _is_, `useEvent` for what _happened_:** displayed state comes from a query; `useEvent` is for sounds, animations, alerts and toasts.
+- **Hook rules:** `api.x.y.useQuery()` and the other handle methods are hooks. ESLint can't check member-chain calls, so never call them conditionally or in loops.
+
+| Export                                                                  | Purpose                                                                                                                                                                               |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createPluginClient(contract, { dependencies?, queries?, mutations? })` | The panel client described above.                                                                                                                                                     |
+| `createOverlayClient(contract, name, { queries?, mutations? })`         | The same for an overlay: only the events and RPCs its declaration lists.                                                                                                              |
+| `defineOverlay(contract, name, { component })`                          | Default export of `src/overlays/<name>.tsx`; the component gets `{ config }` (`OverlayProps`).                                                                                        |
+| `OverlayConfig<typeof contract, 'name'>`                                | The parsed config type of an overlay (defaults applied).                                                                                                                              |
+| `useDeclaredQuery(name, input, options?)`                               | An RPC query by name, live with the definition a plugin client declared for it (plain when none did). For generic UI that only knows the name; plugin code uses its client's handles. |
+| `rpcQueryKey(name, input)`                                              | The TanStack key of an RPC query: `['petalbot', 'rpc', name, input]`.                                                                                                                 |
+| `ConnectionProvider`                                                    | Provides only the connection (the overlay host uses it); `PetalProvider` includes it.                                                                                                 |
+| `usePlugins()`, `usePlugin(id)`, `usePluginsLoaded()`                   | Live `PluginInfo` of every plugin.                                                                                                                                                    |
+| `useUser()`                                                             | `{ id, name, role }` of the logged-in user.                                                                                                                                           |
+| `useConnectionStatus()`                                                 | `'connecting' \| 'open' \| 'reconnecting' \| 'ended'`.                                                                                                                                |
+| `useConnection().state`                                                 | `ReadonlyStore` of `{ status, plugins, pluginsLoaded, problems }` for `useStore` or `subscribe`.                                                                                      |
+| `useApi()`                                                              | JSON over HTTP (`get/post/put/patch/delete`, results are `unknown`), e.g. for `/api/p/<id>/…` routes.                                                                                 |
+| `toast(input)`, `useToast()`                                            | `toast({ title, description?, tone?: 'info' \| 'success' \| 'warning' \| 'danger', durationMs? })`, also outside components. `useToast()` returns the same function.                  |
+| `ClientError`, `ApiError`                                               | Error classes (`code`, `message`; `ApiError` also `status`, `plugins`, `issues`).                                                                                                     |
 
 Clients decode event payloads and RPC results with the contract schemas (codecs, see plugin-api.md, section Data that reaches the browser). `useUser()`, `useApi()` and `usePlugins()` exist only in the panel; overlays have no user session.
+
+## Widgets and settings
+
+```tsx
+function CounterWidget({ config, instanceId }: WidgetProps<typeof counterContract, 'value'>) {
+  const counter = api.counter.get.useQuery({ counter: config.counter });
+  …
+}
+function CounterSettings({ values, save }: SettingsFormProps<typeof counterContract>) { … }
+```
+
+| Type                          | Meaning                                                                                                                                                                                                       |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WidgetProps<C, Id>`          | `{ config, instanceId }`. `config` is parsed with the contract's widget schema (defaults applied; `{}` without config). The same widget can be placed several times; each instance has its own id and config. |
+| `WidgetConfigureProps<C, Id>` | Props of a widget's own `configure` form: `{ config, save, cancel }`. `config` is undefined for a new or no longer valid instance; `save` validates against the schema.                                       |
+| `SettingsFormProps<C>`        | Props of a custom settings form: `values` (parsed), `schema` (JSON Schema), `save(patch)`.                                                                                                                    |
+
+- **Dashboard behavior:**
+  - A widget whose config has a required field without a default opens its configure form when it's added.
+  - A stored config that no longer parses (the plugin changed its schema) shows "Needs configuration" with a Configure button. The component is never called with an invalid config.
+  - Frames are titled "Widget · Label" from the config's first `choice()` field. The label comes from the choice RPC, and a value it no longer lists shows "(deleted)".
+- **Generated forms:** `choice()` fields render as a select filled by the named RPC, in settings, widget config and overlay config alike. A stored value the RPC no longer lists stays visible as "Unknown: <value>".
 
 ## State
 
@@ -31,7 +98,7 @@ Clients decode event payloads and RPC results with the contract schemas (codecs,
 
 Keep only UI state in stores: drafts, filters, a selection shared by a widget and a page. Data the
 server owns (values, queues, recent events) belongs in the plugin's server code and reaches the
-panel through a live `useRpc` (plugin-api.md). Never mutate state; `set` replaces it. A plugin
+panel through a live query (`useQuery`, see Client above). Never mutate state; `set` replaces it. A plugin
 reload starts with fresh stores.
 
 ## Components

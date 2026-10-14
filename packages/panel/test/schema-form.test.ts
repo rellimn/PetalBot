@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { choice } from '@petalbot/sdk';
 import { humanize, patchOf, setPath, settingsFields } from '../src/settings/schema.ts';
 
 const schema = z.toJSONSchema(
@@ -60,6 +61,27 @@ describe('settingsFields', () => {
   it('humanizes keys', () => {
     expect(humanize('perMinute')).toBe('Per minute');
     expect(humanize('api_key')).toBe('Api key');
+  });
+});
+
+describe('choice fields', () => {
+  it('turns choice() fields into choice specs', () => {
+    const schema = z.toJSONSchema(
+      z.object({ counter: choice('counter.options').describe('Counter') }),
+      { io: 'input' },
+    ) as Record<string, unknown>;
+    expect(settingsFields(schema)).toEqual([
+      {
+        key: 'counter',
+        path: ['counter'],
+        label: 'Counter',
+        help: 'Counter',
+        required: true,
+        hasDefault: false,
+        kind: 'choice',
+        rpc: 'counter.options',
+      },
+    ]);
   });
 });
 

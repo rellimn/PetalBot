@@ -21,12 +21,19 @@ const schedule = defineContract({
     },
   },
 });
-const client = createPluginClient(schedule);
+const client = createPluginClient(schedule, { queries: { 'schedule.next': {} } });
+const moved = createPluginClient(schedule, {
+  queries: {
+    'schedule.next': {
+      update: { 'schedule.moved': (_data, event) => ({ at: event.payload.at }) },
+    },
+  },
+});
 
 function Next() {
-  const next = client.useRpc('schedule.next', {});
+  const next = client.schedule.next.useQuery({});
   const [moved, setMoved] = useState('never');
-  client.useEvent('schedule.moved', (event) => {
+  client.schedule.moved.useEvent((event) => {
     setMoved(event.payload.at.toISOString());
   });
   return (
@@ -80,18 +87,14 @@ describe('decoding what the server sends', () => {
 
   it('decodes results of call() outside components too', async () => {
     const { socket } = renderWithPetal(<p>idle</p>);
-    const result = client.call('schedule.next', {});
+    const result = client.schedule.next.call({});
     socket.answer('rpc', { at: '2026-10-12T18:30:00.000Z' });
     await expect(result).resolves.toEqual({ at: new Date('2026-10-12T18:30:00.000Z') });
   });
 
   it('hands decoded payloads to live update functions', async () => {
     function Moved() {
-      const next = client.useRpc(
-        'schedule.next',
-        {},
-        { update: { 'schedule.moved': (_data, event) => ({ at: event.payload.at }) } },
-      );
+      const next = moved.schedule.next.useQuery({});
       // toISOString() only exists on a Date: an undecoded string would throw here.
       return <p>live: {next.data ? next.data.at.toISOString() : '…'}</p>;
     }

@@ -31,5 +31,11 @@
 
 .widget {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pb-space-3);
+}
+
+.muted {
+  color: var(--pb-text-muted);
 }

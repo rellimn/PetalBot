@@ -156,10 +156,30 @@ export class UserStore {
   }
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** Presets stored before widget instances (M4r2) have no ids: `plugin/widget` is unique there. */
+function withInstanceIds(columns: unknown): unknown {
+  if (!Array.isArray(columns)) return columns;
+  return columns.map((column: unknown) =>
+    isRecord(column) && Array.isArray(column.widgets)
+      ? {
+          ...column,
+          widgets: column.widgets.map((widget: unknown) =>
+            isRecord(widget) && widget.id === undefined
+              ? { id: `${String(widget.plugin)}/${String(widget.widget)}`, ...widget }
+              : widget,
+          ),
+        }
+      : column,
+  );
+}
+
 function toPreset(row: PresetRow): Preset | undefined {
   const parsed = presetInputSchema.safeParse({
     name: row.name,
-    columns: parseJson(row.columns),
+    columns: withInstanceIds(parseJson(row.columns)),
   });
   if (!parsed.success) return undefined;
   return { id: row.id, ...parsed.data, createdAt: row.created_at, updatedAt: row.updated_at };

@@ -44,8 +44,9 @@ export const counterContract = defineContract({
       schema: z.object({ counter: z.string(), value: z.number().int(), by: z.string() }),
       expose: ['panel', 'overlay'],
     },
-    // Counters were created or removed. Lists refresh when this arrives.
-    listChanged: { schema: z.object({}), expose: ['panel'] },
+    // Counters were created or removed. Lists refresh when this arrives, and the overlay
+    // notices its counter is gone.
+    listChanged: { schema: z.object({}), expose: ['panel', 'overlay'] },
   },
 
   rpc: {
@@ -80,7 +81,11 @@ export const counterContract = defineContract({
 
   widgets: {
     // One dashboard widget per counter: the user picks which one when placing it.
-    value: { config: z.object({ counter: choice('counter.options').describe('Counter') }) },
+    value: {
+      config: z.object({
+        counter: choice('counter.options').describe('Which counter this widget shows'),
+      }),
+    },
   },
 
   overlays: {
@@ -90,7 +95,7 @@ export const counterContract = defineContract({
         size: z.enum(['small', 'medium', 'large']).default('medium'),
       }),
       // An overlay may only use what it lists here; the server enforces it.
-      events: ['counter.changed'],
+      events: ['counter.changed', 'counter.listChanged'],
       rpc: ['counter.get'],
     },
   },

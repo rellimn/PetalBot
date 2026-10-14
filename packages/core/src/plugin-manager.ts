@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import type { AnyPluginDefinition, Logger } from '@petalbot/sdk';
+import type { AnyPluginDefinition, ContractShape, Logger } from '@petalbot/sdk';
 import { once } from './disposer-scope.ts';
 import type { Kernel } from './kernel.ts';
 import {
@@ -189,6 +189,11 @@ export class PluginManager {
     this.#unsubscribeHealth();
     this.#listeners.clear();
     this.#removedListeners.clear();
+  }
+
+  /** The contract of a plugin whose definition is loaded (running, or read for its settings). */
+  cachedContract(pluginId: string): ContractShape | undefined {
+    return this.#definitions.get(pluginId)?.contract;
   }
 
   /** Stored settings (parsed) and the settings schema; loads the definition if not running. */

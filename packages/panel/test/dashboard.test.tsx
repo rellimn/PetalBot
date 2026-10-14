@@ -6,27 +6,36 @@ import { definePanel } from '@petalbot/ui-sdk';
 import { modUser, pluginInfo, renderApp } from './harness.tsx';
 
 let crash = false;
-const queue = definePanel(defineContract({ id: 'queue', version: '1.0.0' }), {
-  widgets: [
-    {
-      id: 'list',
-      title: 'Queue',
-      minRole: 'mod',
-      component: () => {
-        if (crash) throw new Error('queue widget broke');
-        return <p>queue widget</p>;
+const queue = definePanel(
+  defineContract({ id: 'queue', version: '1.0.0', widgets: { list: {}, stats: {} } }),
+  {
+    widgets: {
+      list: {
+        title: 'Queue',
+        minRole: 'mod',
+        component: () => {
+          if (crash) throw new Error('queue widget broke');
+          return <p>queue widget</p>;
+        },
       },
+      stats: { title: 'Queue stats', component: () => <p>stats widget</p> },
     },
-    { id: 'stats', title: 'Queue stats', component: () => <p>stats widget</p> },
-  ],
-});
-const timer = definePanel(defineContract({ id: 'timer', version: '1.0.0' }), {
-  widgets: [{ id: 'clock', title: 'Timer', minRole: 'mod', component: () => <p>12:30</p> }],
-});
+  },
+);
+const timer = definePanel(
+  defineContract({ id: 'timer', version: '1.0.0', widgets: { clock: {} } }),
+  {
+    widgets: { clock: { title: 'Timer', minRole: 'mod', component: () => <p>12:30</p> } },
+  },
+);
 const plugins = [pluginInfo('queue'), pluginInfo('timer')];
 const panels = { queue, timer };
 
-const preset = (id: string, name: string, widgets: { plugin: string; widget: string }[][]) => ({
+const preset = (
+  id: string,
+  name: string,
+  widgets: { id: string; plugin: string; widget: string }[][],
+) => ({
   id,
   name,
   columns: widgets.map((column, index) => ({ width: index === 0 ? 70 : 30, widgets: column })),
@@ -34,10 +43,10 @@ const preset = (id: string, name: string, widgets: { plugin: string; widget: str
   updatedAt: 1,
 });
 const live = preset('p1', 'Live', [
-  [{ plugin: 'queue', widget: 'list' }],
-  [{ plugin: 'timer', widget: 'clock' }],
+  [{ id: 'queue/list', plugin: 'queue', widget: 'list' }],
+  [{ id: 'timer/clock', plugin: 'timer', widget: 'clock' }],
 ]);
-const chill = preset('p2', 'Chill', [[{ plugin: 'timer', widget: 'clock' }]]);
+const chill = preset('p2', 'Chill', [[{ id: 'timer/clock', plugin: 'timer', widget: 'clock' }]]);
 
 const created = ({ body }: { body: unknown }) => ({
   id: 'new',
@@ -64,12 +73,15 @@ describe('dashboard', () => {
         body: {
           name: 'My dashboard',
           columns: [
-            { width: 70, widgets: [{ plugin: 'queue', widget: 'list' }] },
+            {
+              width: 70,
+              widgets: [{ id: expect.any(String) as string, plugin: 'queue', widget: 'list' }],
+            },
             {
               width: 30,
               widgets: [
-                { plugin: 'queue', widget: 'stats' },
-                { plugin: 'timer', widget: 'clock' },
+                { id: expect.any(String) as string, plugin: 'queue', widget: 'stats' },
+                { id: expect.any(String) as string, plugin: 'timer', widget: 'clock' },
               ],
             },
           ],

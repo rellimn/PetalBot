@@ -19,7 +19,28 @@ const quotesContract = defineContract({
     list: { input: z.object({}), output: z.array(z.string()), expose: { panel: 'mod' } },
   },
 });
-const quotes = createPluginClient(quotesContract);
+const refreshing = createPluginClient(quotesContract, {
+  queries: { 'quotes.list': { refreshOn: ['quotes.added'] } },
+});
+const patching = createPluginClient(quotesContract, {
+  queries: {
+    'quotes.list': {
+      refreshOn: ['quotes.cleared'],
+      update: { 'quotes.added': (texts, event) => [...texts, event.payload.text] },
+    },
+  },
+});
+const broken = createPluginClient(quotesContract, {
+  queries: {
+    'quotes.list': {
+      update: {
+        'quotes.added': () => {
+          throw new Error('boom');
+        },
+      },
+    },
+  },
+});
 
 const added = (id: string, text: string) => ({
   type: 'event',
@@ -37,22 +58,50 @@ const listCalls = (socket: FakeSocket) =>
 const sentTypes = (socket: FakeSocket) => socket.sent.map((message) => message.type);
 
 function Refreshing() {
-  const list = quotes.useRpc('quotes.list', {}, { refreshOn: ['quotes.added'] });
+  const list = refreshing.quotes.list.useQuery({});
   return <p>refreshing: {list.data?.join(', ') ?? 'loading'}</p>;
 }
 
 function Patching({ label }: { readonly label: string }) {
-  const list = quotes.useRpc(
-    'quotes.list',
-    {},
-    {
-      refreshOn: ['quotes.cleared'],
-      update: { 'quotes.added': (texts, event) => [...texts, event.payload.text] },
-    },
-  );
+  const list = patching.quotes.list.useQuery({});
   return (
     <p>
       {label}: {list.data?.join(', ') ?? 'loading'}
+    </p>
+  );
+}
+
+const byKey = defineContract({
+  id: 'keyed',
+  version: '1.0.0',
+  events: {
+    changed: { schema: z.object({ key: z.string(), value: z.number() }), expose: ['panel'] },
+  },
+  rpc: {
+    get: {
+      input: z.object({ key: z.string() }),
+      output: z.object({ key: z.string(), value: z.number() }),
+      expose: { panel: 'mod' },
+    },
+  },
+});
+const keyedClient = createPluginClient(byKey, {
+  queries: {
+    'keyed.get': {
+      update: {
+        'keyed.changed': (data, event, input) =>
+          event.payload.key === input.key ? { ...data, value: event.payload.value } : data,
+      },
+    },
+  },
+});
+const renders: string[] = [];
+function Keyed({ name }: { readonly name: string }) {
+  const value = keyedClient.keyed.get.useQuery({ key: name });
+  renders.push(name);
+  return (
+    <p>
+      {name}: {value.data?.value ?? '…'}
     </p>
   );
 }
@@ -179,17 +228,7 @@ describe('live RPC queries', () => {
   it('falls back to a refetch when an update throws', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     function Broken() {
-      const list = quotes.useRpc(
-        'quotes.list',
-        {},
-        {
-          update: {
-            'quotes.added': () => {
-              throw new Error('boom');
-            },
-          },
-        },
-      );
+      const list = broken.quotes.list.useQuery({});
       return <p>broken: {list.data?.join(', ') ?? 'loading'}</p>;
     }
     const { socket } = renderWithPetal(<Broken />);
@@ -277,5 +316,46 @@ describe('live RPC queries', () => {
     await waitFor(() => {
       expect(listCalls(socket)).toHaveLength(2);
     });
+  });
+  it('passes the query input to update and leaves other entries untouched', async () => {
+    const { socket } = renderWithPetal(
+      <>
+        <Keyed name="a" />
+        <Keyed name="b" />
+      </>,
+    );
+    await waitFor(() => {
+      expect(socket.ofType('rpc')).toHaveLength(2);
+    });
+    act(() => {
+      socket.answer(
+        'rpc',
+        { key: 'a', value: 1 },
+        (message) => (message.input as { key: string }).key === 'a',
+      );
+      socket.answer(
+        'rpc',
+        { key: 'b', value: 1 },
+        (message) => (message.input as { key: string }).key === 'b',
+      );
+    });
+    await screen.findByText('b: 1');
+    renders.length = 0;
+    act(() => {
+      socket.receive({
+        type: 'event',
+        envelope: {
+          id: 'e1',
+          name: 'keyed.changed',
+          payload: { key: 'a', value: 5 },
+          source: 'keyed',
+          timestamp: 1,
+          depth: 0,
+        },
+      });
+    });
+    expect(await screen.findByText('a: 5')).toBeTruthy();
+    expect(screen.getByText('b: 1')).toBeTruthy();
+    expect(renders).not.toContain('b');
   });
 });

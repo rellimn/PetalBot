@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Banner, Checkbox, Field, Input, Select, Textarea } from '@petalbot/ui-sdk';
+import { useChoices } from './choices.ts';
 import { isJson, type FieldSpec, type FormValues } from './schema.ts';
 import styles from './settings.module.css';
 
@@ -139,6 +140,16 @@ function FieldControl({ field, value, errors, onChange, disabled }: ControlProps
         </Field>
       );
     }
+    case 'choice':
+      return (
+        <ChoiceControl
+          field={field}
+          value={value}
+          fieldProps={fieldProps}
+          disabled={disabled}
+          onChange={onChange}
+        />
+      );
     case 'list':
       return (
         <ListControl
@@ -202,6 +213,51 @@ function ListControl({
             .map((line) => line.trim())
             .filter((line) => line !== '');
           onChange(field.path, field.item === 'string' ? lines : lines.map(Number));
+        }}
+      />
+    </Field>
+  );
+}
+
+function ChoiceControl({
+  field,
+  value,
+  fieldProps,
+  disabled,
+  onChange,
+}: {
+  readonly field: Extract<FieldSpec, { kind: 'choice' }>;
+  readonly value: unknown;
+  readonly fieldProps: { label: string; help?: string; error?: string };
+  readonly disabled: boolean;
+  readonly onChange: (path: readonly string[], value: unknown) => void;
+}) {
+  const choices = useChoices(field.rpc);
+  const current = typeof value === 'string' ? value : '';
+  const list = choices.data ?? [];
+  const known = list.some((choice) => choice.value === current);
+  const options = [
+    ...(current === '' || !field.required ? [{ value: '', label: '—' }] : []),
+    // A stored value the RPC no longer lists stays visible instead of silently changing.
+    ...(current !== '' && !known && choices.data !== undefined
+      ? [{ value: current, label: `Unknown: ${current}` }]
+      : []),
+    ...list,
+  ];
+  return (
+    <Field
+      {...fieldProps}
+      {...(choices.isError
+        ? { error: `Could not load the choices: ${choices.error.message}` }
+        : {})}
+    >
+      <Select
+        options={options}
+        value={current}
+        disabled={disabled || choices.isPending}
+        onChange={(event) => {
+          const next = event.target.value;
+          onChange(field.path, next === '' ? undefined : next);
         }}
       />
     </Field>

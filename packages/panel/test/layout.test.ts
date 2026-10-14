@@ -9,7 +9,7 @@ import {
   resizeColumns,
 } from '../src/dashboard/layout.ts';
 
-const w = (widget: string) => ({ plugin: 'p', widget });
+const w = (widget: string) => ({ id: `p/${widget}`, plugin: 'p', widget });
 const columns = [
   { width: 70, widgets: [w('a'), w('b')] },
   { width: 30, widgets: [w('c')] },
