@@ -4,6 +4,7 @@ import {
   PluginUnavailableError,
   RpcTimeoutError,
   ValidationError,
+  type RpcMeta,
 } from '@petalbot/sdk';
 import { ContractRegistry } from '../src/contract-registry.ts';
 import { RpcRouter } from '../src/rpc-router.ts';
@@ -18,13 +19,13 @@ function setup(timeoutMs = 50) {
 describe('RpcRouter', () => {
   it('validates input, passes caller meta and validates output', async () => {
     const rpc = setup();
-    let caller = '';
-    rpc.register('counter.double', (input: { n: number }, meta) => {
-      caller = meta.caller;
+    let meta: RpcMeta | undefined;
+    rpc.register('counter.double', (input: { n: number }, callMeta) => {
+      meta = callMeta;
       return input.n * 2;
     });
     await expect(rpc.call('quotes', 'counter.double', { n: 21 })).resolves.toBe(42);
-    expect(caller).toBe('quotes');
+    expect(meta).toEqual({ caller: 'quotes', who: 'quotes' });
   });
 
   it('rejects invalid input with ValidationError', async () => {
@@ -81,7 +82,7 @@ describe('RpcRouter', () => {
     expect(() => rpc.register('counter.double', () => 0)).toThrow(/already registered/);
     dispose();
     await expect(rpc.call('quotes', 'counter.double', { n: 1 })).rejects.toBeInstanceOf(
-      AccessError,
+      PluginUnavailableError,
     );
   });
 });

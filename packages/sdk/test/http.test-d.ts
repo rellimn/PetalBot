@@ -41,14 +41,15 @@ describe('ctx.http.route', () => {
 describe('RPC meta', () => {
   it('tells implementations whether a browser made the call', () => {
     definePlugin(quotesContract, {
-      rpc: {
-        list: (_input, { caller, client }) => {
-          expectTypeOf(caller).toEqualTypeOf<string>();
-          expectTypeOf(client).toEqualTypeOf<RpcClient | undefined>();
-          return [];
+      setup: () => ({
+        rpc: {
+          list: (_input, { caller, client }) => {
+            expectTypeOf(caller).toEqualTypeOf<string>();
+            expectTypeOf(client).toEqualTypeOf<RpcClient | undefined>();
+            return [];
+          },
         },
-      },
-      setup: () => undefined,
+      }),
     });
   });
 });

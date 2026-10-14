@@ -13,6 +13,7 @@ export interface DisposerScopeOptions {
  */
 export class DisposerScope {
   readonly #disposers: (() => MaybePromise<void>)[] = [];
+  readonly #closeListeners: (() => void)[] = [];
   readonly #logger: Logger;
   readonly #timeoutMs: number;
   #closed = false;
@@ -34,8 +35,26 @@ export class DisposerScope {
     this.#disposers.push(disposer);
   }
 
+  /**
+   * Runs `listener` synchronously when disposal starts, before any disposer is awaited. For
+   * refusing new work at once (e.g. queued lock calls), not for teardown.
+   */
+  onClose(listener: () => void): void {
+    if (this.#closed) listener();
+    else this.#closeListeners.push(listener);
+  }
+
   async dispose(): Promise<void> {
-    this.#closed = true;
+    if (!this.#closed) {
+      this.#closed = true;
+      for (const listener of this.#closeListeners.splice(0)) {
+        try {
+          listener();
+        } catch (error) {
+          this.#logger.error('Close listener failed', { error: errorMessage(error) });
+        }
+      }
+    }
     for (let disposer = this.#disposers.pop(); disposer; disposer = this.#disposers.pop()) {
       await this.#run(disposer);
     }

@@ -288,13 +288,14 @@
               "maxLength": 200,
               "description": "Qualified RPC name, e.g. \"quotes.list\""
             },
-            "input": {}
+            "input": {
+              "description": "Omitted for RPCs without input"
+            }
           },
           "required": [
             "type",
             "id",
-            "name",
-            "input"
+            "name"
           ]
         }
       },

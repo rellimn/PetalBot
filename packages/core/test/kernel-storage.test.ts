@@ -1,19 +1,26 @@
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
-import { AccessError, ValidationError, defineContract, definePlugin } from '@petalbot/sdk';
+import {
+  AccessError,
+  PluginUnavailableError,
+  ValidationError,
+  defineContract,
+  definePlugin,
+} from '@petalbot/sdk';
 import { Kernel } from '../src/kernel.ts';
 import { currentPlugin } from '../src/plugin-scope.ts';
 import { openDatabase } from '../src/storage/database.ts';
 import { createStorage, type KernelStorage } from '../src/storage/storage.ts';
 import { notes } from './fixtures/notes-db/schema.ts';
-import { notesMigrations } from './fixtures/paths.ts';
+import { notesDir } from './fixtures/paths.ts';
 import { counterContract, createMemoryLogger, delay, listenerContract } from './helpers.ts';
 
 const settingsSchema = z.object({
   prefix: z.string().default('!'),
   cooldownMs: z.number().int().min(0).default(3000),
 });
+const settingsContract = defineContract({ ...counterContract, settings: settingsSchema });
 const double = ({ n }: { n: number }) => n * 2;
 const notesContract = defineContract({ id: 'notes', version: '1.0.0' });
 
@@ -29,11 +36,10 @@ describe('Kernel settings', () => {
     storage.settings.write('counter', { prefix: '?' });
     const seen: unknown[] = [];
     await kernel.start(
-      definePlugin(counterContract, {
-        settings: settingsSchema,
-        rpc: { double },
+      definePlugin(settingsContract, {
         setup(ctx) {
           seen.push(ctx.settings.get());
+          return { rpc: { double } };
         },
       }),
     );
@@ -43,11 +49,9 @@ describe('Kernel settings', () => {
   it('refuses to start with invalid stored settings', async () => {
     const { storage, kernel } = setup();
     storage.settings.write('counter', { cooldownMs: -1 });
-    const plugin = definePlugin(counterContract, {
-      settings: settingsSchema,
-      rpc: { double },
+    const plugin = definePlugin(settingsContract, {
       setup() {
-        // nothing to set up
+        return { rpc: { double } };
       },
     });
     await expect(kernel.start(plugin)).rejects.toThrow(
@@ -60,14 +64,13 @@ describe('Kernel settings', () => {
     const { storage, kernel } = setup();
     const changes: unknown[][] = [];
     const scopes: (string | undefined)[] = [];
-    const plugin = definePlugin(counterContract, {
-      settings: settingsSchema,
-      rpc: { double },
+    const plugin = definePlugin(settingsContract, {
       setup(ctx) {
         ctx.settings.onChange((next, previous) => {
           changes.push([next, previous]);
           scopes.push(currentPlugin());
         });
+        return { rpc: { double } };
       },
     });
     await kernel.start(plugin);
@@ -91,11 +94,9 @@ describe('Kernel settings', () => {
 
   it('stores settings of stopped plugins without notifying anyone', async () => {
     const { storage, kernel } = setup();
-    const plugin = definePlugin(counterContract, {
-      settings: settingsSchema,
-      rpc: { double },
+    const plugin = definePlugin(settingsContract, {
       setup() {
-        // nothing to set up
+        return { rpc: { double } };
       },
     });
     await kernel.updateSettings(plugin, { prefix: '$' });
@@ -104,19 +105,206 @@ describe('Kernel settings', () => {
 });
 
 describe('Kernel kv and secrets', () => {
+  const kvContract = defineContract({ id: 'kvtest', version: '1.0.0' });
+
+  it('updates kv values atomically, even with many concurrent callers', async () => {
+    const { kernel, storage } = setup();
+    const done: Promise<unknown>[] = [];
+    await kernel.start(
+      definePlugin(kvContract, {
+        kv: { total: z.number().int(), names: z.array(z.string()) },
+        setup(ctx) {
+          for (let i = 0; i < 100; i += 1) {
+            done.push(ctx.kv.update('total', (current) => (current ?? 0) + 1));
+          }
+          done.push(ctx.kv.update('names', (current = []) => [...current, 'a']));
+        },
+      }),
+    );
+    await Promise.all(done);
+    expect(storage.kv.get('kvtest', 'total')).toBe(100);
+    expect(storage.kv.get('kvtest', 'names')).toEqual(['a']);
+  });
+
+  it('resolves kv.update to the stored value and deletes on undefined', async () => {
+    const { kernel, storage } = setup();
+    const results: unknown[] = [];
+    await kernel.start(
+      definePlugin(kvContract, {
+        kv: { total: z.number().int() },
+        async setup(ctx) {
+          results.push(await ctx.kv.update('total', () => 5));
+          results.push(await ctx.kv.update('total', () => undefined));
+        },
+      }),
+    );
+    expect(results).toEqual([5, undefined]);
+    expect(storage.kv.get('kvtest', 'total')).toBeUndefined();
+  });
+
+  it('writes nothing when the updater throws or returns an invalid value', async () => {
+    const { kernel, storage } = setup();
+    storage.kv.set('kvtest', 'total', 1);
+    const errors: unknown[] = [];
+    await kernel.start(
+      definePlugin(kvContract, {
+        kv: { total: z.number().int() },
+        async setup(ctx) {
+          await ctx.kv
+            .update('total', () => {
+              throw new Error('boom');
+            })
+            .catch((error: unknown) => errors.push(error));
+          await ctx.kv.update('total', () => 1.5).catch((error: unknown) => errors.push(error));
+        },
+      }),
+    );
+    expect(errors[0]).toEqual(new Error('boom'));
+    expect(errors[1]).toBeInstanceOf(ValidationError);
+    expect(storage.kv.get('kvtest', 'total')).toBe(1);
+  });
+
+  it('rejects an async updater, writes nothing and leaves no unhandled rejection', async () => {
+    const { kernel, storage } = setup();
+    let error: unknown;
+    await kernel.start(
+      definePlugin(kvContract, {
+        kv: { total: z.number().int() },
+        async setup(ctx) {
+          // Untyped on purpose: plain JS can pass an async updater, which the types forbid.
+          const kv = ctx.kv as unknown as {
+            update(key: string, fn: () => unknown): Promise<unknown>;
+          };
+          error = await kv
+            .update('total', () => Promise.reject(new Error('late')))
+            .catch((caught: unknown) => caught);
+        },
+      }),
+    );
+    await delay(5);
+    expect(error).toBeInstanceOf(TypeError);
+    expect(String(error)).toContain('must be synchronous');
+    expect(storage.kv.get('kvtest', 'total')).toBeUndefined();
+    expect(kernel.isDegraded('kvtest')).toBe(false);
+  });
+
+  it('rejects kv.update when the stored value no longer matches the schema', async () => {
+    const { kernel, storage } = setup();
+    storage.kv.set('kvtest', 'total', 'not a number');
+    let error: unknown;
+    await kernel.start(
+      definePlugin(kvContract, {
+        kv: { total: z.number().int() },
+        async setup(ctx) {
+          error = await ctx.kv.update('total', (n) => (n ?? 0) + 1).catch((e: unknown) => e);
+        },
+      }),
+    );
+    expect(error).toBeInstanceOf(ValidationError);
+    expect(String(error)).toContain('stored kv "total" of plugin "kvtest"');
+    expect(storage.kv.get('kvtest', 'total')).toBe('not a number');
+  });
+
+  it('serializes async sections with ctx.lock', async () => {
+    const { kernel, storage } = setup();
+    const done: Promise<unknown>[] = [];
+    await kernel.start(
+      definePlugin(kvContract, {
+        kv: { total: z.number().int() },
+        setup(ctx) {
+          const addOne = () =>
+            ctx.lock('total', async () => {
+              const current = (await ctx.kv.get('total')) ?? 0;
+              await delay(2);
+              await ctx.kv.set('total', current + 1);
+            });
+          done.push(addOne(), addOne(), addOne());
+        },
+      }),
+    );
+    await Promise.all(done);
+    expect(storage.kv.get('kvtest', 'total')).toBe(3);
+  });
+
+  it('rejects waiting lock callers before slow disposers finish', async () => {
+    const { kernel } = setup();
+    const waiting: Promise<unknown>[] = [];
+    let releaseLock = (): void => undefined;
+    let releaseDispose = (): void => undefined;
+    const started: string[] = [];
+    await kernel.start(
+      definePlugin(kvContract, {
+        setup(ctx) {
+          void ctx.lock(
+            'k',
+            () =>
+              new Promise<void>((resolve) => {
+                releaseLock = resolve;
+              }),
+          );
+          for (const name of ['b', 'c']) {
+            waiting.push(
+              ctx.lock('k', () => {
+                started.push(name);
+              }),
+            );
+          }
+          ctx.onDispose(
+            () =>
+              new Promise<void>((resolve) => {
+                releaseDispose = resolve;
+              }),
+          );
+        },
+      }),
+    );
+    const stopping = kernel.stop('kvtest');
+    const outcomes = await Promise.allSettled(waiting);
+    expect(outcomes.map((outcome) => outcome.status)).toEqual(['rejected', 'rejected']);
+    releaseLock();
+    await delay(5);
+    expect(started).toEqual([]);
+    releaseDispose();
+    await stopping;
+  });
+
+  it('rejects waiting callers as soon as the plugin stops', async () => {
+    const { kernel } = setup();
+    let waiting: Promise<unknown> = Promise.resolve();
+    let release = (): void => undefined;
+    await kernel.start(
+      definePlugin(kvContract, {
+        setup(ctx) {
+          void ctx.lock(
+            'k',
+            () =>
+              new Promise<void>((resolve) => {
+                release = resolve;
+              }),
+          );
+          waiting = ctx.lock('k', () => 'never');
+        },
+      }),
+    );
+    const stopping = kernel.stop('kvtest');
+    await expect(waiting).rejects.toBeInstanceOf(PluginUnavailableError);
+    release();
+    await stopping;
+  });
+
   it('validates kv keys and values and keeps them across restarts', async () => {
     const { kernel } = setup();
     const kv = { total: z.number().int() };
     await kernel.start(
       definePlugin(counterContract, {
         kv,
-        rpc: { double },
         async setup(ctx) {
           expect(await ctx.kv.get('total')).toBeUndefined();
           await ctx.kv.set('total', 5);
           await expect(ctx.kv.set('total', 1.5)).rejects.toBeInstanceOf(ValidationError);
           const untyped = ctx.kv as unknown as { get(key: string): Promise<unknown> };
           await expect(untyped.get('nope')).rejects.toBeInstanceOf(AccessError);
+          return { rpc: { double } };
         },
       }),
     );
@@ -125,9 +313,9 @@ describe('Kernel kv and secrets', () => {
     await kernel.start(
       definePlugin(counterContract, {
         kv,
-        rpc: { double },
         async setup(ctx) {
           seen.push(await ctx.kv.get('total'));
+          return { rpc: { double } };
         },
       }),
     );
@@ -138,10 +326,10 @@ describe('Kernel kv and secrets', () => {
     const { storage, kernel } = setup();
     await kernel.start(
       definePlugin(counterContract, {
-        rpc: { double },
         async setup(ctx) {
           await ctx.secrets.set('token', 'abc123');
           expect(await ctx.secrets.get('token')).toBe('abc123');
+          return { rpc: { double } };
         },
       }),
     );
@@ -156,14 +344,43 @@ describe('Kernel db, schedule and isRunning', () => {
     const rows: unknown[] = [];
     await kernel.start(
       definePlugin(notesContract, {
-        db: { schema: { notes }, migrationsFolder: notesMigrations },
+        db: { schema: { notes }, migrations: 'migrations' },
         setup(ctx) {
           ctx.db.insert(notes).values({ text: 'hi' }).run();
           rows.push(...ctx.db.select().from(notes).all());
         },
       }),
+      { dir: notesDir },
     );
     expect(rows).toEqual([{ id: 1, text: 'hi' }]);
+  });
+
+  it('reads migrations relative to the plugin folder and needs that folder', async () => {
+    const { kernel } = setup();
+    const plugin = definePlugin(notesContract, {
+      db: { schema: { notes }, migrations: 'migrations' },
+      setup(ctx) {
+        ctx.db.insert(notes).values({ text: 'hi' }).run();
+      },
+    });
+    await expect(kernel.start(plugin)).rejects.toThrow(
+      'Plugin "notes" declares db, so the kernel needs its folder: start(definition, { dir })',
+    );
+    await kernel.start(plugin, { dir: notesDir });
+    expect(kernel.isRunning('notes')).toBe(true);
+  });
+
+  it('refuses a migrations folder outside the plugin folder', async () => {
+    const { kernel } = setup();
+    const plugin = definePlugin(notesContract, {
+      db: { schema: { notes }, migrations: '../foreign-db/migrations' },
+      setup() {
+        // nothing to set up
+      },
+    });
+    await expect(kernel.start(plugin, { dir: notesDir })).rejects.toThrow(
+      'The migrations folder of plugin "notes" must be inside the plugin folder',
+    );
   });
 
   it('rejects ctx.db for plugins without a db declaration', async () => {
@@ -214,9 +431,8 @@ describe('Kernel db, schedule and isRunning', () => {
     expect(probe.isRunning?.()).toBe(false);
     await kernel.start(
       definePlugin(counterContract, {
-        rpc: { double },
         setup() {
-          // nothing to set up
+          return { rpc: { double } };
         },
       }),
     );
@@ -240,16 +456,19 @@ describe('Kernel lifecycle safety', () => {
 
   it('deletes a stopped plugin’s data and refuses while it runs', async () => {
     const { storage, kernel } = setup();
-    const plugin = definePlugin(notesContract, {
-      db: { schema: { notes }, migrationsFolder: notesMigrations },
+    const notesWithSettings = defineContract({
+      ...notesContract,
       settings: z.object({ a: z.number().default(1) }),
+    });
+    const plugin = definePlugin(notesWithSettings, {
+      db: { schema: { notes }, migrations: 'migrations' },
       kv: { k: z.number() },
       async setup(ctx) {
         await ctx.kv.set('k', 1);
         await ctx.secrets.set('s', 'v');
       },
     });
-    await kernel.start(plugin);
+    await kernel.start(plugin, { dir: notesDir });
     await kernel.updateSettings(plugin, { a: 2 });
     expect(() => kernel.deleteData('notes')).toThrow(/Stop plugin "notes"/);
     await kernel.stop('notes');
@@ -290,11 +509,10 @@ describe('Kernel lifecycle safety', () => {
 
   it('does not wait forever for a settings listener', async () => {
     const kernel = new Kernel({ logger: createMemoryLogger(), listenerTimeoutMs: 20 });
-    const plugin = definePlugin(counterContract, {
-      settings: settingsSchema,
-      rpc: { double },
+    const plugin = definePlugin(settingsContract, {
       setup(ctx) {
         ctx.settings.onChange(() => new Promise<void>(() => undefined));
+        return { rpc: { double } };
       },
     });
     await kernel.start(plugin);
@@ -315,11 +533,10 @@ describe('Kernel storage round-trips', () => {
 
   it('keeps transformed settings startable after an update', async () => {
     const { storage, kernel } = setup();
-    const plugin = definePlugin(counterContract, {
-      settings: tagsSchema,
-      rpc: { double },
+    const tagsContract = defineContract({ ...counterContract, settings: tagsSchema });
+    const plugin = definePlugin(tagsContract, {
       setup() {
-        // nothing to set up
+        return { rpc: { double } };
       },
     });
     await expect(kernel.updateSettings(plugin, { tags: 'x,y' })).resolves.toEqual({
@@ -328,11 +545,10 @@ describe('Kernel storage round-trips', () => {
     expect(storage.settings.read('counter')).toEqual({ tags: 'x,y' });
     const seen: unknown[] = [];
     await kernel.start(
-      definePlugin(counterContract, {
-        settings: tagsSchema,
-        rpc: { double },
+      definePlugin(tagsContract, {
         setup(ctx) {
           seen.push(ctx.settings.get());
+          return { rpc: { double } };
         },
       }),
     );
@@ -344,13 +560,13 @@ describe('Kernel storage round-trips', () => {
     await kernel.start(
       definePlugin(counterContract, {
         kv: { length: z.string().transform((value) => value.length), note: z.string().optional() },
-        rpc: { double },
         async setup(ctx) {
           await ctx.kv.set('length', 'abc');
           expect(await ctx.kv.get('length')).toBe(3);
           await ctx.kv.set('note', 'x');
           await ctx.kv.set('note', undefined);
           expect(await ctx.kv.get('note')).toBeUndefined();
+          return { rpc: { double } };
         },
       }),
     );
@@ -361,11 +577,11 @@ describe('Kernel storage round-trips', () => {
     await kernel.start(
       definePlugin(counterContract, {
         kv: { when: z.date() },
-        rpc: { double },
         async setup(ctx) {
           await expect(ctx.kv.set('when', new Date())).rejects.toThrow(
             'kv "when" of plugin "counter" must be JSON-serializable',
           );
+          return { rpc: { double } };
         },
       }),
     );

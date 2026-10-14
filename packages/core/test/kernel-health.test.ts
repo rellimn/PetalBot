@@ -12,12 +12,6 @@ describe('plugin attribution', () => {
     const api: { tick?: () => Promise<void>; write?: () => Promise<unknown> } = {};
     await kernel.start(
       definePlugin(counterContract, {
-        rpc: {
-          double: ({ n }) => {
-            seen.rpc = currentPlugin();
-            return n * 2;
-          },
-        },
         setup(ctx) {
           seen.setup = currentPlugin();
           api.tick = async () => {
@@ -27,6 +21,14 @@ describe('plugin attribution', () => {
           api.write = () =>
             ctx.providers('counter.sink').get('listener:main')?.call('write', { text: 'x' }) ??
             Promise.resolve(undefined);
+          return {
+            rpc: {
+              double: ({ n }) => {
+                seen.rpc = currentPlugin();
+                return n * 2;
+              },
+            },
+          };
         },
       }),
     );
@@ -85,11 +87,11 @@ describe('plugin attribution', () => {
     const tick: { run?: (n: number) => void } = {};
     await kernel.start(
       definePlugin(counterContract, {
-        rpc: { double: ({ n }) => n * 2 },
         setup(ctx) {
           tick.run = (n) => {
             ctx.emit('counter.ticked', { n });
           };
+          return { rpc: { double: ({ n }) => n * 2 } };
         },
       }),
     );

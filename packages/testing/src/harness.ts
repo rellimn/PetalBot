@@ -1,4 +1,7 @@
 import { randomBytes } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { expect } from 'vitest';
 import type { z } from 'zod';
 import { Kernel, createStorage, openDatabase, type KernelStorage } from '@petalbot/core';
 import type {
@@ -14,6 +17,8 @@ import type {
   PluginDefinition,
   RpcDefsOf,
   RpcImpls,
+  RpcInputArgs,
+  SettingsOf,
 } from '@petalbot/sdk';
 
 type SchemaOf<D, K extends string> = D extends Record<K, infer S extends z.ZodType> ? S : never;
@@ -29,14 +34,20 @@ export type FakeDependencies<C extends ContractShape> = {
 };
 
 export interface HarnessOptions<
+  Own extends ContractShape,
   Deps extends readonly ContractShape[],
   Opt extends readonly ContractShape[],
 > {
   /** Unfaked RPCs throw when called. Optional dependencies only run when listed here. */
   readonly fakes?: FakeDependencies<Deps[number] | Opt[number]>;
-  /** Stored settings to start with (validated against the plugin's schema on start). */
-  readonly settings?: Readonly<Record<string, unknown>>;
+  /** Stored settings to start with (validated against the contract's settings on start). */
+  readonly settings?: z.input<SettingsOf<Own>>;
   readonly logger?: Logger;
+  /**
+   * The plugin folder, for `db` migrations. Default: the nearest folder above the running test
+   * file whose package.json has a `petalbot` field.
+   */
+  readonly dir?: string;
 }
 
 export interface TestHarness<
@@ -56,8 +67,10 @@ export interface TestHarness<
   /** Calls one of the plugin's own RPCs the way another plugin would. */
   call<N extends keyof OwnRpc<Own> & string>(
     name: N,
-    input: z.input<SchemaOf<OwnRpc<Own>[N], 'input'>>,
+    ...args: RpcInputArgs<OwnRpc<Own>[N]>
   ): Promise<z.output<SchemaOf<OwnRpc<Own>[N], 'output'>>>;
+  /** Merges `patch` into the stored settings, as the panel does, and notifies the plugin. */
+  updateSettings(patch: Partial<z.input<SettingsOf<Own>>>): Promise<z.output<SettingsOf<Own>>>;
   /** Resolves when all queued events have been handled. */
   idle(): Promise<void>;
   /** Stops the caller, the plugin and the fakes. */
@@ -90,12 +103,11 @@ export async function createTestHarness<
   Own extends ContractShape,
   Deps extends readonly ContractShape[],
   Opt extends readonly ContractShape[],
-  Settings extends z.ZodObject = z.ZodObject<NoMembers>,
   Kv extends KvSchema = NoMembers,
   Db extends DbSchema | undefined = undefined,
 >(
-  definition: PluginDefinition<Own, Deps, Opt, Settings, Kv, Db>,
-  options: HarnessOptions<Deps, Opt> = {},
+  definition: PluginDefinition<Own, Deps, Opt, Kv, Db>,
+  options: HarnessOptions<Own, Deps, Opt> = {},
 ): Promise<TestHarness<Own, Deps, Opt>> {
   const storage = createStorage(openDatabase(':memory:'), randomBytes(32));
   const pluginId = definition.contract.id;
@@ -122,7 +134,13 @@ export async function createTestHarness<
     );
     started.push(contract.id);
   }
-  await kernel.start(definition);
+  const dir = options.dir ?? pluginDirOfRunningTest();
+  if (definition.db !== undefined && dir === undefined) {
+    throw new Error(
+      `createTestHarness: plugin "${pluginId}" declares db; pass { dir } with its folder`,
+    );
+  }
+  await kernel.start(definition, dir === undefined ? {} : { dir });
   started.push(pluginId);
 
   const caller: { ctx?: Caller } = {};
@@ -150,10 +168,11 @@ export async function createTestHarness<
       }
       emitter.emit(name, payload);
     },
-    call(name, input) {
+    call(name, ...args) {
       if (!caller.ctx) return Promise.reject(new Error('The harness caller is not running'));
-      return caller.ctx.call(name, input) as Promise<never>;
+      return caller.ctx.call(name, args[0]) as Promise<never>;
     },
+    updateSettings: (patch) => kernel.updateSettings(definition, patch) as Promise<never>,
     idle: () => kernel.idle(),
     async stop() {
       for (const id of [...started].reverse()) await kernel.stop(id);
@@ -178,5 +197,35 @@ function fakeDefinition(
       return [member, handler];
     }),
   );
-  return { contract, rpc, setup: onSetup };
+  return {
+    contract,
+    setup: (ctx: Emitter) => {
+      onSetup(ctx);
+      return { rpc };
+    },
+  };
+}
+
+/** The plugin folder of the test file Vitest is running, if one can be found. */
+function pluginDirOfRunningTest(): string | undefined {
+  const testPath = expect.getState().testPath;
+  return testPath === undefined ? undefined : findPluginDir(dirname(testPath));
+}
+
+/** The nearest folder at or above `from` whose package.json has a `petalbot` field. */
+function findPluginDir(from: string): string | undefined {
+  for (let dir = from; ; dir = dirname(dir)) {
+    const manifest = join(dir, 'package.json');
+    if (existsSync(manifest) && isPluginManifest(readFileSync(manifest, 'utf8'))) return dir;
+    if (dirname(dir) === dir) return undefined;
+  }
+}
+
+function isPluginManifest(json: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(json);
+    return typeof parsed === 'object' && parsed !== null && 'petalbot' in parsed;
+  } catch {
+    return false;
+  }
 }

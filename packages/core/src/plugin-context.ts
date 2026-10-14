@@ -12,6 +12,7 @@ import {
   type ScheduleApi,
 } from '@petalbot/sdk';
 import type { DisposerScope } from './disposer-scope.ts';
+import { KeyedLock } from './keyed-lock.ts';
 import type { EventBus, RawEventHandler } from './event-bus.ts';
 import type { HookRunner, RawHookHandler } from './hook-runner.ts';
 import { ownerOf, splitName } from './names.ts';
@@ -51,6 +52,7 @@ export interface RuntimeContext {
     get(key: string): Promise<unknown>;
     set(key: string, value: unknown): Promise<void>;
     delete(key: string): Promise<void>;
+    update(key: string, updater: (current: unknown) => unknown): Promise<unknown>;
   };
   readonly secrets: {
     get(name: string): Promise<string | undefined>;
@@ -75,6 +77,7 @@ export interface RuntimeContext {
   provide(slot: string, key: string, impl: RawProviderImpl): () => void;
   providers(slot: string): unknown;
   isRunning(pluginId: string): boolean;
+  lock(key: string, fn: () => MaybePromise<unknown>): Promise<unknown>;
   onDispose(fn: () => MaybePromise<void>): void;
 }
 
@@ -96,6 +99,12 @@ const isJsonSafe = (value: unknown): boolean => {
     return false;
   }
 };
+
+const isPromiseLike = (value: unknown): value is PromiseLike<unknown> =>
+  (typeof value === 'object' || typeof value === 'function') &&
+  value !== null &&
+  'then' in value &&
+  typeof value.then === 'function';
 
 /** Runs `fn`, turning a synchronous throw into a rejected promise. */
 const attempt = <T>(fn: () => T): Promise<T> =>
@@ -136,6 +145,12 @@ export function createPluginContext(options: CreateContextOptions): RuntimeConte
     if (!schema) throw new AccessError(`Plugin "${pluginId}" declares no kv key "${key}"`);
     return schema;
   };
+
+  const locks = new KeyedLock();
+  // On close, not as a disposer: queued calls must reject before slow disposers are awaited.
+  scope.onClose(() => {
+    locks.close(new PluginUnavailableError(pluginId));
+  });
 
   return {
     pluginId,
@@ -179,6 +194,29 @@ export function createPluginContext(options: CreateContextOptions): RuntimeConte
           assertLive();
           kvSchema(key);
           services.storage.kv.delete(pluginId, key);
+        }),
+      update: (key, updater) =>
+        attempt(() => {
+          assertLive();
+          const schema = kvSchema(key);
+          const where = `kv "${key}" of plugin "${pluginId}"`;
+          const stored = services.storage.kv.update(pluginId, key, (raw) => {
+            const current =
+              raw === undefined ? undefined : parseOrThrow(schema, raw, `stored ${where}`);
+            const next: unknown = updater(current);
+            if (isPromiseLike(next)) {
+              // The promise may still reject later: keep that from becoming an unhandled rejection.
+              Promise.resolve(next).catch(() => undefined);
+              throw new TypeError(
+                `The updater of ${where} must be synchronous (it returned a promise)`,
+              );
+            }
+            if (next === undefined) return undefined;
+            parseOrThrow(schema, next, where);
+            if (!isJsonSafe(next)) throw new Error(`${where} must be JSON-serializable`);
+            return next;
+          });
+          return stored === undefined ? undefined : parseOrThrow(schema, stored, where);
         }),
     },
     secrets: {
@@ -273,6 +311,10 @@ export function createPluginContext(options: CreateContextOptions): RuntimeConte
         throw new AccessError(`Plugin "${pluginId}" cannot check "${id}" (not a dependency)`);
       }
       return services.isRunning(id);
+    },
+    lock(key, fn) {
+      assertLive();
+      return locks.run(key, fn);
     },
     onDispose(fn) {
       assertLive();

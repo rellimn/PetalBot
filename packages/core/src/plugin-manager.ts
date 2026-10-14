@@ -198,7 +198,10 @@ export class PluginManager {
     return this.#serialize(async () => {
       const plugin = this.#require(pluginId);
       const definition = await this.#definition(pluginId, plugin);
-      return { values: this.#kernel.readSettings(definition), schema: definition.settings };
+      return {
+        values: this.#kernel.readSettings(definition),
+        schema: definition.contract.settings,
+      };
     });
   }
 
@@ -391,7 +394,7 @@ export class PluginManager {
           });
         }
       }
-      await this.#kernel.start(definition);
+      await this.#kernel.start(definition, { dir: plugin.dir });
       this.#definitions.set(pluginId, definition);
       this.#bundles.set(pluginId, bundles);
       this.#set(pluginId, { state: 'running' });
@@ -491,7 +494,7 @@ export class PluginManager {
       dependencies: Object.keys(plugin.manifest.dependencies),
       optionalDependencies: Object.keys(plugin.manifest.optionalDependencies),
       hasPanel: plugin.manifest.entries.panel !== undefined,
-      ...(definition ? { hasSettings: definition.settings !== undefined } : {}),
+      ...(definition ? { hasSettings: definition.contract.settings !== undefined } : {}),
       ...(bundle
         ? {
             panel: {

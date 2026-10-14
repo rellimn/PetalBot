@@ -1,3 +1,4 @@
+import type { z } from 'zod';
 import type { ContractShape, EventDef, HookDef, ProviderSlotDef, RpcDef } from './contract.ts';
 
 export type UnionToIntersection<U> = (U extends unknown ? (arg: U) => void : never) extends (
@@ -48,6 +49,11 @@ export type OwnRpcDefs<C extends ContractShape> = C extends {
   ? R
   : // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- `{}` = no RPCs
     {};
+
+/** The arguments that carry an RPC's input: `[input]`, or `[input?]` for RPCs without input. */
+export type RpcInputArgs<D> = D extends { input: infer I extends z.ZodType }
+  ? [input: z.input<I>]
+  : [input?: undefined];
 
 export type MaybePromise<T> = T | Promise<T>;
 

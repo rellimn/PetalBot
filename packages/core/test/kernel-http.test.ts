@@ -20,17 +20,19 @@ const webContract = defineContract({
 
 function webPlugin(options: { fail?: boolean } = {}) {
   return definePlugin(webContract, {
-    rpc: {
-      whoami: (_input, { caller, client }) => ({
-        caller,
-        ...(client ? { client: client.kind } : {}),
-      }),
-    },
     setup(ctx) {
       ctx.http.route('GET', '/ping', () => {
         if (options.fail === true) throw new Error('boom');
         return Response.json({ plugin: currentPlugin() });
       });
+      return {
+        rpc: {
+          whoami: (_input, { caller, client }) => ({
+            caller,
+            ...(client ? { client: client.kind } : {}),
+          }),
+        },
+      };
     },
   });
 }

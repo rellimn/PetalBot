@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import { choiceOf, type Choice } from './choice.ts';
 import type { EventDefsOf, MergeMaps, RpcDefsOf } from './type-utils.ts';
 
 export type Role = 'owner' | 'mod';
@@ -16,7 +17,8 @@ export interface HookDef<S extends z.ZodType = z.ZodType> {
 }
 
 export interface RpcDef<I extends z.ZodType = z.ZodType, O extends z.ZodType = z.ZodType> {
-  readonly input: I;
+  /** Omit for an RPC without input: callers pass nothing, and the input must be `undefined`. */
+  readonly input?: I;
   readonly output: O;
   readonly expose?: { readonly panel?: Role; readonly overlay?: boolean };
 }
@@ -27,6 +29,12 @@ export interface ProviderMethodDef<
 > {
   readonly input: I;
   readonly output: O;
+}
+
+/** A dashboard widget. Its title, icon and component live in `definePanel`. */
+export interface WidgetDef {
+  /** Per-instance configuration, edited in the dashboard and validated when a preset is saved. */
+  readonly config?: z.ZodObject;
 }
 
 export type ProviderSlotDef = Readonly<Record<string, ProviderMethodDef>>;
@@ -49,10 +57,13 @@ export interface OverlayDef {
 export interface ContractShape {
   readonly id: string;
   readonly version: string;
+  /** Settings schema. Give every field a default so a fresh install can start. */
+  readonly settings?: z.ZodObject;
   readonly events?: Readonly<Record<string, EventDef>>;
   readonly hooks?: Readonly<Record<string, HookDef>>;
   readonly rpc?: Readonly<Record<string, RpcDef>>;
   readonly providers?: Readonly<Record<string, ProviderSlotDef>>;
+  readonly widgets?: Readonly<Record<string, WidgetDef>>;
   readonly overlays?: Readonly<Record<string, OverlayDef>>;
 }
 
@@ -96,15 +107,61 @@ export type CheckOverlays<C extends ContractShape> = C extends {
     }
   : unknown;
 
+type UnwrapField<S> =
+  S extends z.ZodDefault<infer I>
+    ? UnwrapField<I>
+    : S extends z.ZodOptional<infer I>
+      ? UnwrapField<I>
+      : S extends z.ZodNullable<infer I>
+        ? UnwrapField<I>
+        : S;
+/** RPC names of the `choice()` fields of one form schema (distributes over unions). */
+type ChoicesIn<O> =
+  O extends z.ZodObject<infer Shape>
+    ? { [K in keyof Shape]: UnwrapField<Shape[K]> extends Choice<infer N> ? N : never }[keyof Shape]
+    : never;
+type ConfigOf<D> = D extends { config: infer O } ? O : never;
+type UsedChoices<C> =
+  | (C extends { settings: infer S } ? ChoicesIn<S> : never)
+  | (C extends { widgets: infer W } ? ChoicesIn<ConfigOf<W[keyof W]>> : never)
+  | (C extends { overlays: infer O } ? ChoicesIn<ConfigOf<O[keyof O]>> : never);
+/** Own RPCs a `choice()` may name: no input, output `Choices`, `expose.panel`. */
+type ChoiceRpcs<C> = C extends { id: infer Id extends string; rpc: infer R }
+  ? {
+      [K in keyof R & string]: R[K] extends { input: z.ZodType }
+        ? never
+        : R[K] extends { output: infer Out extends z.ZodType; expose: { panel: Role } }
+          ? z.output<Out> extends readonly { value: string; label: string }[]
+            ? `${Id}.${K}`
+            : never
+          : never;
+    }[keyof R & string]
+  : never;
+
+/** Fails `defineContract` when a `choice()` names an RPC it may not use. */
+export type CheckChoices<C extends ContractShape> = [
+  Exclude<UsedChoices<C>, ChoiceRpcs<C>>,
+] extends [never]
+  ? unknown
+  : {
+      readonly 'choice() needs an own RPC without input, with output Choices and expose.panel': Exclude<
+        UsedChoices<C>,
+        ChoiceRpcs<C>
+      >;
+    };
+
 const ID_PATTERN = /^[a-z][a-z0-9-]*$/;
 const MEMBER_PATTERN = /^[a-zA-Z][a-zA-Z0-9]*$/;
 const SEMVER_PATTERN = /^\d+\.\d+\.\d+$/;
 
 /**
  * Declares a plugin's public surface. Keeps literal types so names autocomplete.
- * Throws on malformed ids, versions, member names or overlay declarations.
+ * Throws on malformed ids, versions, member names, widget ids, overlay declarations and
+ * `choice()` fields.
  */
-export function defineContract<const C extends ContractShape>(contract: C & CheckOverlays<C>): C {
+export function defineContract<const C extends ContractShape>(
+  contract: C & CheckOverlays<C> & CheckChoices<C>,
+): C {
   const shape: ContractShape = contract;
   if (!ID_PATTERN.test(shape.id)) {
     throw new Error(`Invalid contract id "${shape.id}" (expected ${String(ID_PATTERN)})`);
@@ -112,18 +169,66 @@ export function defineContract<const C extends ContractShape>(contract: C & Chec
   if (!SEMVER_PATTERN.test(shape.version)) {
     throw new Error(`Invalid version "${shape.version}" in contract "${shape.id}"`);
   }
-  const groups = [shape.events, shape.hooks, shape.rpc, shape.providers];
-  for (const group of groups) {
-    for (const member of Object.keys(group ?? {})) {
+  const groups = [
+    ['events', shape.events],
+    ['hooks', shape.hooks],
+    ['rpc', shape.rpc],
+    ['providers', shape.providers],
+  ] as const;
+  const seen = new Map<string, string>();
+  for (const [group, members] of groups) {
+    for (const member of Object.keys(members ?? {})) {
       if (!MEMBER_PATTERN.test(member)) {
         throw new Error(`Invalid member name "${member}" in contract "${shape.id}"`);
       }
+      const other = seen.get(member);
+      if (other !== undefined) {
+        throw new Error(
+          `Member name "${member}" is used in both ${other} and ${group} of contract "${shape.id}"`,
+        );
+      }
+      seen.set(member, group);
+    }
+  }
+  for (const name of Object.keys(shape.widgets ?? {})) {
+    if (!ID_PATTERN.test(name)) {
+      throw new Error(
+        `Invalid widget id "${name}" in contract "${shape.id}" (expected ${String(ID_PATTERN)})`,
+      );
     }
   }
   for (const [name, overlay] of Object.entries(shape.overlays ?? {})) {
     checkOverlay(shape, name, overlay);
   }
+  checkChoices(shape);
   return contract;
+}
+
+/** Each `choice()` field must name an own RPC without input and with `expose.panel`. */
+function checkChoices(contract: ContractShape): void {
+  const forms: [string, z.ZodObject | undefined][] = [
+    ['Settings', contract.settings],
+    ...Object.entries(contract.widgets ?? {}).map(
+      ([name, widget]): [string, z.ZodObject | undefined] => [`Widget "${name}"`, widget.config],
+    ),
+    ...Object.entries(contract.overlays ?? {}).map(
+      ([name, overlay]): [string, z.ZodObject | undefined] => [`Overlay "${name}"`, overlay.config],
+    ),
+  ];
+  for (const [form, schema] of forms) {
+    for (const [field, fieldSchema] of Object.entries<z.core.$ZodType>(schema?.shape ?? {})) {
+      const rpc = choiceOf(fieldSchema);
+      if (rpc === undefined) continue;
+      const def = rpc.startsWith(`${contract.id}.`)
+        ? findMember([contract], rpc, (c) => c.rpc)
+        : undefined;
+      if (def === undefined || def.input !== undefined || def.expose?.panel === undefined) {
+        throw new Error(
+          `${form} of contract "${contract.id}": field "${field}" uses choice("${rpc}"), which must name an own RPC without input and with expose.panel`,
+        );
+      }
+    }
+  }
 }
 
 function checkOverlay(contract: ContractShape, name: string, overlay: OverlayDef): void {

@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { resolve } from 'node:path';
 import {
   AccessError,
   PluginUnavailableError,
@@ -14,13 +15,14 @@ import { ContractRegistry, type Owned } from './contract-registry.ts';
 import { DisposerScope, once } from './disposer-scope.ts';
 import { EventBus } from './event-bus.ts';
 import { HookRunner } from './hook-runner.ts';
+import { isInside } from './fs-paths.ts';
 import { errorMessage } from './names.ts';
 import { createPluginContext, type SettingsListener } from './plugin-context.ts';
 import { PluginHealth, type HealthListener, type PluginHealthOptions } from './plugin-health.ts';
 import { PluginRouteTable } from './plugin-routes.ts';
 import { currentPlugin, runInPlugin } from './plugin-scope.ts';
 import { ProviderRegistry } from './provider-registry.ts';
-import { RpcRouter } from './rpc-router.ts';
+import { RpcRouter, type RawRpcHandler } from './rpc-router.ts';
 import { createScheduler } from './scheduler.ts';
 import { openDatabase } from './storage/database.ts';
 import { dropPluginTables, preparePluginDb } from './storage/plugin-db.ts';
@@ -135,8 +137,14 @@ export class Kernel {
     return true;
   }
 
-  /** Starts a plugin. Its required dependencies must already be running. */
-  async start(definition: AnyPluginDefinition): Promise<void> {
+  /**
+   * Starts a plugin. Its required dependencies must already be running. `dir` is the plugin's
+   * folder; plugins that declare `db` need it to find their migrations.
+   */
+  async start(
+    definition: AnyPluginDefinition,
+    options: { readonly dir?: string } = {},
+  ): Promise<void> {
     const pluginId = definition.contract.id;
     if (this.#running.has(pluginId)) throw new Error(`Plugin "${pluginId}" is already running`);
     for (const dependency of definition.dependencies ?? []) {
@@ -145,7 +153,10 @@ export class Kernel {
     checkOverlayDependencies(definition);
     const settings: SettingsState = { value: this.#loadSettings(definition), listeners: new Set() };
     const db = definition.db
-      ? preparePluginDb(this.#storage.sqlite, pluginId, definition.db)
+      ? preparePluginDb(this.#storage.sqlite, pluginId, {
+          schema: definition.db.schema,
+          migrationsFolder: migrationsFolderOf(pluginId, definition.db, options.dir),
+        })
       : undefined;
     this.#health.reset(pluginId);
 
@@ -187,16 +198,7 @@ export class Kernel {
           isRunning: (id) => this.isRunning(id),
         },
       });
-      for (const member of Object.keys(definition.contract.rpc ?? {})) {
-        const handler = definition.rpc?.[member];
-        if (!handler) throw new Error(`Plugin "${pluginId}" does not implement RPC "${member}"`);
-        scope.add(
-          this.#rpc.register(`${pluginId}.${member}`, (input, meta) =>
-            handler(input, { ...meta, ctx } as never),
-          ),
-        );
-      }
-      await withTimeout(
+      const result = await withTimeout(
         Promise.resolve().then(() => runInPlugin(pluginId, () => definition.setup(ctx as never))),
         this.#setupTimeoutMs,
         () =>
@@ -204,11 +206,40 @@ export class Kernel {
             `Setup of plugin "${pluginId}" timed out after ${String(this.#setupTimeoutMs)} ms`,
           ),
       );
+      this.#registerRpcs(definition, result, scope);
     } catch (error) {
       await runInPlugin(pluginId, () => scope.dispose());
       throw error;
     }
     this.#running.set(pluginId, { definition, scope });
+  }
+
+  /** Checks what `setup` returned against the contract and registers the RPC implementations. */
+  #registerRpcs(definition: AnyPluginDefinition, result: unknown, scope: DisposerScope): void {
+    const pluginId = definition.contract.id;
+    const members = Object.keys(definition.contract.rpc ?? {});
+    const rpc =
+      typeof result === 'object' && result !== null && 'rpc' in result ? result.rpc : undefined;
+    if (rpc !== undefined && (typeof rpc !== 'object' || rpc === null)) {
+      throw new Error(`Setup of plugin "${pluginId}" returned an rpc field that is not an object`);
+    }
+    const impls = (rpc ?? {}) as Readonly<Record<string, unknown>>;
+    for (const name of Object.keys(impls)) {
+      if (!members.includes(name)) {
+        throw new Error(
+          `Plugin "${pluginId}" implements "${name}", which is not an RPC of its contract`,
+        );
+      }
+    }
+    for (const member of members) {
+      const handler = impls[member];
+      if (typeof handler !== 'function') {
+        throw new Error(
+          `Plugin "${pluginId}" does not implement RPC "${member}" (setup must return { rpc: { ${member}: … } })`,
+        );
+      }
+      scope.add(this.#rpc.register(`${pluginId}.${member}`, handler as RawRpcHandler));
+    }
   }
 
   /** Stops a plugin and runs all of its disposers in reverse order. */
@@ -228,10 +259,15 @@ export class Kernel {
     patch: Readonly<Record<string, unknown>>,
   ): Promise<unknown> {
     const pluginId = definition.contract.id;
-    if (!definition.settings) throw new AccessError(`Plugin "${pluginId}" declares no settings`);
+    if (!definition.contract.settings)
+      throw new AccessError(`Plugin "${pluginId}" declares no settings`);
     // Persist the validated *input*; the parsed output may not survive JSON or re-parsing.
     const merged = { ...this.#storage.settings.read(pluginId), ...patch };
-    const next = parseOrThrow(definition.settings, merged, `settings of plugin "${pluginId}"`);
+    const next = parseOrThrow(
+      definition.contract.settings,
+      merged,
+      `settings of plugin "${pluginId}"`,
+    );
     this.#storage.settings.write(pluginId, merged);
     const state = this.#settings.get(pluginId);
     if (state) {
@@ -304,13 +340,33 @@ export class Kernel {
 
   #loadSettings(definition: AnyPluginDefinition): unknown {
     const pluginId = definition.contract.id;
-    if (!definition.settings) return {};
+    if (!definition.contract.settings) return {};
     return parseOrThrow(
-      definition.settings,
+      definition.contract.settings,
       this.#storage.settings.read(pluginId),
       `stored settings of plugin "${pluginId}"`,
     );
   }
+}
+
+/** The plugin's migrations folder: `db.migrations` (default `drizzle`) inside its folder. */
+function migrationsFolderOf(
+  pluginId: string,
+  db: { readonly migrations?: string },
+  dir: string | undefined,
+): string {
+  if (dir === undefined) {
+    throw new Error(
+      `Plugin "${pluginId}" declares db, so the kernel needs its folder: start(definition, { dir })`,
+    );
+  }
+  const folder = resolve(dir, db.migrations ?? 'drizzle');
+  if (!isInside(dir, folder)) {
+    throw new AccessError(
+      `The migrations folder of plugin "${pluginId}" must be inside the plugin folder`,
+    );
+  }
+  return folder;
 }
 
 /** An overlay may only use contracts its plugin depends on. */

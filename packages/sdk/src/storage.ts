@@ -9,6 +9,15 @@ export interface KvApi<K extends KvSchema> {
   get<Key extends keyof K & string>(key: Key): Promise<z.output<K[Key]> | undefined>;
   set<Key extends keyof K & string>(key: Key, value: z.input<K[Key]>): Promise<void>;
   delete(key: keyof K & string): Promise<void>;
+  /**
+   * Atomic read-modify-write. `updater` runs synchronously inside one SQLite transaction with the
+   * current value (`undefined` if unset). Its result is validated and stored; `undefined` deletes
+   * the key. Resolves to the stored value. A throwing, async or invalid updater writes nothing.
+   */
+  update<Key extends keyof K & string>(
+    key: Key,
+    updater: (current: z.output<K[Key]> | undefined) => z.input<K[Key]> | undefined,
+  ): Promise<z.output<K[Key]> | undefined>;
 }
 
 export interface SettingsApi<S extends z.ZodObject> {
@@ -41,8 +50,8 @@ export type DbSchema = Readonly<Record<string, unknown>>;
 export interface DbOptions<Schema extends DbSchema> {
   /** Drizzle table definitions; every table name must start with `<pluginId>_`. */
   readonly schema: Schema;
-  /** Absolute path of the plugin's drizzle-kit migrations folder. */
-  readonly migrationsFolder: string;
+  /** The drizzle-kit migrations folder, relative to the plugin folder. Default `'drizzle'`. */
+  readonly migrations?: string;
 }
 
 export type PluginDb<Schema extends DbSchema> = BetterSQLite3Database<Schema>;

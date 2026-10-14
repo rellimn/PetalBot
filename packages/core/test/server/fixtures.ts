@@ -7,6 +7,7 @@ export const modUser: PanelUser = { id: 'u-mod', name: 'mia', role: 'mod' };
 export const alertsContract = defineContract({
   id: 'alerts',
   version: '1.0.0',
+  settings: z.object({ volume: z.number().min(0).max(100).default(50) }),
   events: {
     shown: { schema: z.object({ text: z.string() }), expose: ['panel', 'overlay'] },
     internal: { schema: z.object({}) },
@@ -27,10 +28,11 @@ export const alertsContract = defineContract({
     },
     whoami: {
       input: z.object({}),
-      output: z.object({ caller: z.string(), client: z.unknown() }),
+      output: z.object({ caller: z.string(), who: z.string(), client: z.unknown() }),
       expose: { panel: 'mod', overlay: true },
     },
     slow: { input: z.object({}), output: z.object({}), expose: { panel: 'mod' } },
+    ping: { output: z.literal('pong'), expose: { panel: 'mod' } },
     hidden: { input: z.object({}), output: z.object({}) },
     when: {
       input: z.object({}),
@@ -68,19 +70,6 @@ export interface AlertsOptions {
 /** Settings, routes, every RPC and a handle to emit events. */
 export function alertsPlugin(options: AlertsOptions = {}) {
   return definePlugin(alertsContract, {
-    settings: z.object({ volume: z.number().min(0).max(100).default(50) }),
-    rpc: {
-      recent: ({ limit }) => ['a', 'b', 'c'].slice(0, limit),
-      clear: () => ({ cleared: 3 }),
-      whoami: (_input, { caller, client }) => ({ caller, client }),
-      slow: async () => {
-        await (options.slow ?? Promise.resolve());
-        return {};
-      },
-      hidden: () => ({}),
-      when: () => ({ at: '2026-10-12T18:30:00.000Z' }),
-      lengths: () => ({ n: 'abc' }),
-    },
     setup(ctx) {
       ctx.http.route(
         'POST',
@@ -104,6 +93,21 @@ export function alertsPlugin(options: AlertsOptions = {}) {
           ctx.emit('alerts.broken', { n: 'abc' });
         },
       });
+      return {
+        rpc: {
+          recent: ({ limit }) => ['a', 'b', 'c'].slice(0, limit),
+          clear: () => ({ cleared: 3 }),
+          whoami: (_input, { caller, client, who }) => ({ caller, who, client }),
+          ping: () => 'pong',
+          slow: async () => {
+            await (options.slow ?? Promise.resolve());
+            return {};
+          },
+          hidden: () => ({}),
+          when: () => ({ at: '2026-10-12T18:30:00.000Z' }),
+          lengths: () => ({ n: 'abc' }),
+        },
+      };
     },
   });
 }

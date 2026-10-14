@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 import { defineContract, definePlugin } from '@petalbot/sdk';
@@ -13,23 +15,29 @@ const pointsContract = defineContract({
 const rewardsContract = defineContract({
   id: 'rewards',
   version: '1.0.0',
+  settings: z.object({ threshold: z.number().default(100) }),
   events: { granted: { schema: z.object({ userId: z.string() }) } },
-  rpc: { check: { input: z.object({ userId: z.string() }), output: z.boolean() } },
+  rpc: {
+    check: { input: z.object({ userId: z.string() }), output: z.boolean() },
+    threshold: { output: z.number() },
+  },
 });
 
 const rewards = definePlugin(rewardsContract, {
   dependencies: [pointsContract],
-  settings: z.object({ threshold: z.number().default(100) }),
-  rpc: {
-    check: async ({ userId }, { ctx }) =>
-      (await ctx.call('points.getBalance', { userId })) >= ctx.settings.get().threshold,
-  },
   setup(ctx) {
     ctx.on('points.changed', (event) => {
       if (event.payload.balance >= ctx.settings.get().threshold) {
         ctx.emit('rewards.granted', { userId: event.payload.userId });
       }
     });
+    return {
+      rpc: {
+        check: async ({ userId }) =>
+          (await ctx.call('points.getBalance', { userId })) >= ctx.settings.get().threshold,
+        threshold: () => ctx.settings.get().threshold,
+      },
+    };
   },
 });
 
@@ -66,6 +74,42 @@ describe('createTestHarness', () => {
     await expect(harness.call('rewards.check', { userId: 'u' })).rejects.toThrow(
       'RPC "points.getBalance" is not faked in this harness',
     );
+    await harness.stop();
+  });
+
+  it('types settings from the contract and calls RPCs without input', async () => {
+    const harness = await createTestHarness(rewards, { settings: { threshold: 7 } });
+    await expect(harness.call('rewards.threshold')).resolves.toBe(7);
+    // @ts-expect-error -- threshold is a number
+    void createTestHarness(rewards, { settings: { threshold: 'high' } }).catch(() => undefined);
+    await harness.stop();
+  });
+
+  it('updates settings like the panel does', async () => {
+    const harness = await createTestHarness(rewards);
+    await expect(harness.updateSettings({ threshold: 3 })).resolves.toEqual({ threshold: 3 });
+    await expect(harness.call('rewards.threshold')).resolves.toBe(3);
+    await harness.stop();
+  });
+
+  it('needs the plugin folder for plugins with a db when none can be found', async () => {
+    const notes = sqliteTable('notes_items', {
+      id: integer('id').primaryKey({ autoIncrement: true }),
+      text: text('text').notNull(),
+    });
+    const notesPlugin = definePlugin(defineContract({ id: 'notes', version: '1.0.0' }), {
+      db: { schema: { notes }, migrations: 'migrations' },
+      setup() {
+        // nothing to set up
+      },
+    });
+    // packages/testing has no petalbot package.json above its tests, so discovery finds nothing.
+    await expect(createTestHarness(notesPlugin)).rejects.toThrow(
+      'createTestHarness: plugin "notes" declares db; pass { dir } with its folder',
+    );
+    const dir = join(import.meta.dirname, '../../core/test/fixtures/notes-db');
+    const harness = await createTestHarness(notesPlugin, { dir });
+    expect(harness.kernel.isRunning('notes')).toBe(true);
     await harness.stop();
   });
 

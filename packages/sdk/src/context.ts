@@ -21,6 +21,7 @@ import type {
   NoMembers,
   ProviderSlotsOf,
   RpcDefsOf,
+  RpcInputArgs,
 } from './type-utils.ts';
 import type { Veto } from './veto.ts';
 
@@ -55,6 +56,13 @@ export type ImplementableSlots<
   Opt extends readonly ContractShape[],
 > = MergeMaps<ProviderSlotsOf<DepsOf<Deps, Opt>>>;
 export type OwnedSlots<Own extends ContractShape> = MergeMaps<ProviderSlotsOf<Own>>;
+
+/** The settings schema of a contract (an empty object schema when it declares none). */
+export type SettingsOf<C extends ContractShape> = C extends {
+  settings: infer S extends z.ZodObject;
+}
+  ? S
+  : z.ZodObject<NoMembers>;
 
 type SchemaOf<D, K extends string> = D extends Record<K, infer S extends z.ZodType> ? S : never;
 type SlotOf<D> = D extends ProviderSlotDef ? D : never;
@@ -119,13 +127,13 @@ export interface PluginContext<
   Own extends ContractShape,
   Deps extends readonly ContractShape[],
   Opt extends readonly ContractShape[],
-  Settings extends z.ZodObject = z.ZodObject<NoMembers>,
   Kv extends KvSchema = NoMembers,
   Db extends DbSchema | undefined = undefined,
 > {
   readonly pluginId: Own['id'];
   readonly log: Logger;
-  readonly settings: SettingsApi<Settings>;
+  /** Typed from the contract's `settings`. */
+  readonly settings: SettingsApi<SettingsOf<Own>>;
   readonly kv: KvApi<Kv>;
   readonly secrets: SecretsApi;
   readonly schedule: ScheduleApi;
@@ -155,10 +163,10 @@ export interface PluginContext<
     input: z.input<SchemaOf<RunnableHooks<Own>[N], 'input'>>,
   ): Promise<HookResult<z.output<SchemaOf<RunnableHooks<Own>[N], 'input'>>>>;
 
+  /** Calls a dependency's RPC. RPCs without input take none: `ctx.call('counter.list')`. */
   call<N extends keyof CallableRpc<Deps, Opt> & string>(
     name: N,
-    input: z.input<SchemaOf<CallableRpc<Deps, Opt>[N], 'input'>>,
-    options?: CallOptions,
+    ...args: [...RpcInputArgs<CallableRpc<Deps, Opt>[N]>, options?: CallOptions]
   ): Promise<z.output<SchemaOf<CallableRpc<Deps, Opt>[N], 'output'>>>;
 
   provide<N extends keyof ImplementableSlots<Deps, Opt> & string>(
@@ -173,6 +181,13 @@ export interface PluginContext<
 
   /** Whether a (usually optional) dependency is running right now. */
   isRunning(pluginId: Deps[number]['id'] | Opt[number]['id']): boolean;
+
+  /**
+   * Runs `fn` while holding the plugin's lock named `key`: calls with the same key run one at a
+   * time (FIFO), different keys in parallel. For async read-call-write sections; use
+   * `kv.update` or a single SQL statement when nothing is awaited in between.
+   */
+  lock<T>(key: string, fn: () => MaybePromise<T>): Promise<T>;
 
   onDispose(fn: () => MaybePromise<void>): void;
 }

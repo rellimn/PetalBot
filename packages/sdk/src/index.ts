@@ -18,5 +18,7 @@ export type {
   NoMembers,
   ProviderSlotsOf,
   RpcDefsOf,
+  RpcInputArgs,
 } from './type-utils.ts';
 export * from './codecs.ts';
+export * from './choice.ts';

@@ -6,6 +6,7 @@ export class KvStore {
   readonly #upsert;
   readonly #remove;
   readonly #removeAll;
+  readonly #update;
 
   constructor(sqlite: Sqlite) {
     this.#select = sqlite.prepare<[string, string], { value: string }>(
@@ -19,6 +20,14 @@ export class KvStore {
       'DELETE FROM petalbot_kv WHERE plugin_id = ? AND key = ?',
     );
     this.#removeAll = sqlite.prepare<[string]>('DELETE FROM petalbot_kv WHERE plugin_id = ?');
+    this.#update = sqlite.transaction(
+      (pluginId: string, key: string, fn: (current: unknown) => unknown): unknown => {
+        const next = fn(this.get(pluginId, key));
+        if (next === undefined) this.delete(pluginId, key);
+        else this.set(pluginId, key, next);
+        return next;
+      },
+    );
   }
 
   get(pluginId: string, key: string): unknown {
@@ -32,6 +41,11 @@ export class KvStore {
 
   delete(pluginId: string, key: string): void {
     this.#remove.run(pluginId, key);
+  }
+
+  /** Runs `fn` on the current value inside one transaction; `undefined` from `fn` deletes the key. */
+  update(pluginId: string, key: string, fn: (current: unknown) => unknown): unknown {
+    return this.#update(pluginId, key, fn);
   }
 
   deleteAll(pluginId: string): void {

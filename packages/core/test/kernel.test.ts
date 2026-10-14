@@ -1,7 +1,10 @@
+import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 import {
   AccessError,
   PluginUnavailableError,
+  ValidationError,
+  defineContract,
   definePlugin,
   type EventEnvelope,
 } from '@petalbot/sdk';
@@ -21,7 +24,6 @@ interface CounterApi {
 
 function counterPlugin(onApi: (api: CounterApi) => void) {
   return definePlugin(counterContract, {
-    rpc: { double: ({ n }) => n * 2 },
     setup(ctx) {
       onApi({
         async tick(n) {
@@ -33,6 +35,7 @@ function counterPlugin(onApi: (api: CounterApi) => void) {
           ctx.providers('counter.sink').get(key)?.call('write', { text }) ??
           Promise.resolve(undefined),
       });
+      return { rpc: { double: ({ n }) => n * 2 } };
     },
   });
 }
@@ -270,14 +273,15 @@ describe('Kernel', () => {
     const kernel = new Kernel({ logger: createMemoryLogger() });
     await kernel.start(
       definePlugin(counterContract, {
-        rpc: {
-          double: ({ n }, { ctx }) => {
-            ctx.emit('counter.ticked', { n });
-            return n * 2;
-          },
-        },
-        setup() {
-          // nothing to set up
+        setup(ctx) {
+          return {
+            rpc: {
+              double: ({ n }) => {
+                ctx.emit('counter.ticked', { n });
+                return n * 2;
+              },
+            },
+          };
         },
       }),
     );
@@ -295,5 +299,98 @@ describe('Kernel', () => {
     );
     await kernel.idle();
     expect(heard).toEqual([21]);
+  });
+});
+
+describe('Kernel RPC registration', () => {
+  const pingContract = defineContract({
+    id: 'ping',
+    version: '1.0.0',
+    rpc: {
+      ping: { output: z.string() },
+      echo: { input: z.object({ text: z.string() }), output: z.string() },
+    },
+  });
+  const panelCall = {
+    kind: 'panel' as const,
+    user: { id: 'u1', name: 'Mia', role: 'mod' as const },
+  };
+
+  it('registers the RPCs setup returns and tells them who called', async () => {
+    const kernel = new Kernel({ logger: createMemoryLogger() });
+    const seen: string[] = [];
+    await kernel.start(
+      definePlugin(pingContract, {
+        setup: () => ({
+          rpc: {
+            ping: (_input, { who }) => {
+              seen.push(who);
+              return 'pong';
+            },
+            echo: ({ text }) => text,
+          },
+        }),
+      }),
+    );
+    await expect(kernel.callFromClient('ping.ping', undefined, panelCall)).resolves.toBe('pong');
+    await expect(
+      kernel.callFromClient('ping.ping', undefined, { kind: 'overlay', instanceId: 'i1' }),
+    ).resolves.toBe('pong');
+    await expect(kernel.callFromClient('ping.echo', { text: 'hi' }, panelCall)).resolves.toBe('hi');
+    expect(seen).toEqual(['Mia', 'overlay']);
+  });
+
+  it('rejects input for RPCs without input', async () => {
+    const kernel = new Kernel({ logger: createMemoryLogger() });
+    await kernel.start(
+      definePlugin(pingContract, {
+        setup: () => ({ rpc: { ping: () => 'pong', echo: ({ text }) => text } }),
+      }),
+    );
+    await expect(
+      kernel.callFromClient('ping.ping', { text: 'x' }, panelCall),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it('answers PluginUnavailableError while setup is still running, then serves the call', async () => {
+    const kernel = new Kernel({ logger: createMemoryLogger() });
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const starting = kernel.start(
+      definePlugin(pingContract, {
+        async setup() {
+          await gate;
+          return { rpc: { ping: () => 'pong', echo: ({ text }) => text } };
+        },
+      }),
+    );
+    await delay(5);
+    await expect(kernel.callFromClient('ping.ping', undefined, panelCall)).rejects.toBeInstanceOf(
+      PluginUnavailableError,
+    );
+    release();
+    await starting;
+    await expect(kernel.callFromClient('ping.ping', undefined, panelCall)).resolves.toBe('pong');
+  });
+
+  it('refuses a setup that misses an RPC or implements an unknown one', async () => {
+    const kernel = new Kernel({ logger: createMemoryLogger() });
+    const missing = { contract: pingContract, setup: () => ({ rpc: { ping: () => 'pong' } }) };
+    await expect(kernel.start(missing)).rejects.toThrow(
+      'Plugin "ping" does not implement RPC "echo" (setup must return { rpc: { echo: … } })',
+    );
+    expect(kernel.isRunning('ping')).toBe(false);
+    const extra = {
+      contract: pingContract,
+      setup: () => ({ rpc: { ping: () => 'pong', echo: () => '', other: () => '' } }),
+    };
+    await expect(kernel.start(extra)).rejects.toThrow(
+      'Plugin "ping" implements "other", which is not an RPC of its contract',
+    );
+    await expect(kernel.callFromClient('ping.ping', undefined, panelCall)).rejects.toBeInstanceOf(
+      PluginUnavailableError,
+    );
   });
 });

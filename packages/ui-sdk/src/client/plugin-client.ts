@@ -45,7 +45,7 @@ export type PanelRpcs<C extends ContractShape> = {
 };
 
 type PayloadOf<D> = D extends { schema: infer S extends z.ZodType } ? z.output<S> : never;
-type InputOf<D> = D extends { input: infer S extends z.ZodType } ? z.input<S> : never;
+type InputOf<D> = D extends { input: infer S extends z.ZodType } ? z.input<S> : undefined;
 type OutputOf<D> = D extends { output: infer S extends z.ZodType } ? z.output<S> : never;
 
 /**

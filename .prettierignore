@@ -5,3 +5,4 @@ coverage
 docs/superpowers
 .superpowers
 docs/api/*.json
+plugins/*/drizzle

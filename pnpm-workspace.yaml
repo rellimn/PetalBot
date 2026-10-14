@@ -4,5 +4,6 @@ packages:
 allowBuilds:
   unrs-resolver: false
   better-sqlite3: true
+  esbuild: false
 minimumReleaseAgeExclude:
   - prettier@3.9.10

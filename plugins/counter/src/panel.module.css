@@ -1,3 +1,15 @@
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--pb-space-3);
+  padding: var(--pb-space-2) 0;
+}
+
+.name {
+  flex: 1;
+  font-weight: var(--pb-font-weight-medium);
+}
+
 .value {
   color: var(--pb-accent-text);
   font-family: var(--pb-font-family-display);
@@ -10,9 +22,14 @@
   gap: var(--pb-space-2);
 }
 
+.create {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--pb-space-2);
+  margin-top: var(--pb-space-3);
+}
+
 .widget {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--pb-space-3);
+  flex-direction: column;
 }

@@ -43,7 +43,7 @@ export const rpcMessage = z.object({
   type: z.literal('rpc'),
   id: requestId,
   name: memberName.describe('Qualified RPC name, e.g. "quotes.list"'),
-  input: z.unknown(),
+  input: z.unknown().optional().describe('Omitted for RPCs without input'),
 });
 const streamToggle = z.boolean().optional().describe('false stops the stream; default true');
 

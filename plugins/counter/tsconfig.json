@@ -1,5 +1,7 @@
 {
   "extends": "@petalbot/tooling/tsconfig/react.json",
-  "compilerOptions": { "types": ["vite/client", "node"] },
-  "include": ["src", "test", "vite.config.ts", "vitest.config.ts"]
+  "compilerOptions": {
+    "types": ["vite/client", "node"]
+  },
+  "include": ["src", "test", "vite.config.ts", "vitest.config.ts", "drizzle.config.ts"]
 }

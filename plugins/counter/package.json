@@ -1,12 +1,13 @@
 {
   "name": "@petalbot-plugin/counter",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "vite build",
     "dev": "vite build --watch",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "db:generate": "drizzle-kit generate"
   },
   "petalbot": {
     "id": "counter",
@@ -22,6 +23,7 @@
   "dependencies": {
     "@petalbot/sdk": "workspace:*",
     "@petalbot/ui-sdk": "workspace:*",
+    "drizzle-orm": "^0.45.4",
     "lucide-react": "^1.55.0",
     "react": "^19.3.0",
     "zod": "^4.6.5"
@@ -30,6 +32,7 @@
     "@petalbot/testing": "workspace:*",
     "@petalbot/tooling": "workspace:*",
     "@types/react": "^19.3.0",
+    "drizzle-kit": "^0.31.11",
     "vite": "^8.3.4"
   }
 }

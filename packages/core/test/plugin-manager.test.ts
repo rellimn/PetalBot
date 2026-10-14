@@ -42,15 +42,20 @@ async function setup(
   const calls: string[] = [];
   const loadScopes: (string | undefined)[] = [];
   const definitions: Record<string, AnyPluginDefinition> = {
-    counter: definePlugin(counterContract, {
-      settings: z.object({ step: z.number().int().min(1).default(1) }),
-      kv: { boots: z.number() },
-      rpc: { double: ({ n }) => n * 2 },
-      async setup(ctx) {
-        calls.push('counter');
-        await ctx.kv.set('boots', 1);
+    counter: definePlugin(
+      defineContract({
+        ...counterContract,
+        settings: z.object({ step: z.number().int().min(1).default(1) }),
+      }),
+      {
+        kv: { boots: z.number() },
+        async setup(ctx) {
+          calls.push('counter');
+          await ctx.kv.set('boots', 1);
+          return { rpc: { double: ({ n }) => n * 2 } };
+        },
       },
-    }),
+    ),
     listener: definePlugin(listenerContract, {
       dependencies: [counterContract],
       setup() {
@@ -195,9 +200,9 @@ describe('PluginManager', () => {
     await manager.start();
     await manager.enable('counter');
     definitions.counter = definePlugin(counterContract, {
-      rpc: { double: ({ n }) => n * 2 },
       setup() {
         throw new Error('reload boom');
+        return { rpc: { double: ({ n }) => n * 2 } };
       },
     });
     await expect(manager.reload('counter')).rejects.toThrow('reload boom');

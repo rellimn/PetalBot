@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import {
   AccessError,
   PluginUnavailableError,
@@ -28,6 +29,9 @@ export interface RpcCallOptions {
   readonly client?: RpcClient;
 }
 
+/** Validates the input of RPCs that declare none: it must be absent. */
+const NO_INPUT = z.undefined();
+
 export class RpcRouter {
   readonly #contracts: ContractRegistry;
   readonly #timeoutMs: number;
@@ -57,17 +61,19 @@ export class RpcRouter {
     if (owner === undefined) throw new AccessError(`Malformed RPC name "${name}"`);
     if (!this.#contracts.get(owner)) throw new PluginUnavailableError(owner);
     const rpc = this.#contracts.rpc(name);
+    if (!rpc) throw new AccessError(`Unknown RPC "${name}"`);
+    // Registered contract, no handler yet: setup is still running (or the plugin is stopping).
     const handler = this.#handlers.get(name);
-    if (!rpc || !handler) throw new AccessError(`Unknown RPC "${name}"`);
-    const parsedInput = parseOrThrow(rpc.def.input, input, `input of "${name}"`);
+    if (!handler) throw new PluginUnavailableError(owner);
+    const parsedInput = parseOrThrow(rpc.def.input ?? NO_INPUT, input, `input of "${name}"`);
     const timeoutMs = options.timeoutMs ?? this.#timeoutMs;
+    const client = options.client;
+    const who =
+      client === undefined ? caller : client.kind === 'panel' ? client.user.name : 'overlay';
     const output = await withTimeout(
       Promise.resolve().then(() =>
         runInPlugin(owner, () =>
-          handler(parsedInput as never, {
-            caller,
-            ...(options.client ? { client: options.client } : {}),
-          }),
+          handler(parsedInput as never, { caller, who, ...(client ? { client } : {}) }),
         ),
       ),
       timeoutMs,

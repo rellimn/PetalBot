@@ -245,7 +245,7 @@ describe('ClientGateway', () => {
       expect(mod.transport.reply('3')).toEqual({
         type: 'reply',
         id: '3',
-        result: { caller: 'client', client: { kind: 'panel', user: modUser } },
+        result: { caller: 'client', who: 'mia', client: { kind: 'panel', user: modUser } },
       });
       expect(owner.transport.reply('4')).toEqual({
         type: 'reply',
@@ -261,6 +261,17 @@ describe('ClientGateway', () => {
     send({ type: 'rpc', id: '1', name: 'alerts.recent', input: { limit: 'three' } });
     await vi.waitFor(() => {
       expect(transport.reply('1')).toMatchObject({ error: { code: 'validation' } });
+    });
+  });
+
+  it('calls RPCs without input when the frame has no input', async () => {
+    const { connect } = await setup();
+    const { transport, send } = connect(asMod);
+    send({ type: 'rpc', id: '1', name: 'alerts.ping' });
+    send({ type: 'rpc', id: '2', name: 'alerts.ping', input: { x: 1 } });
+    await vi.waitFor(() => {
+      expect(transport.reply('1')).toEqual({ type: 'reply', id: '1', result: 'pong' });
+      expect(transport.reply('2')).toMatchObject({ error: { code: 'validation' } });
     });
   });
 
@@ -311,7 +322,7 @@ describe('ClientGateway', () => {
       expect(transport.reply('3')).toMatchObject({ result: ['a'] });
       expect(transport.reply('4')).toMatchObject({ error: { code: 'forbidden' } });
       expect(transport.reply('5')).toMatchObject({
-        result: { client: { kind: 'overlay', instanceId: 'i1' } },
+        result: { who: 'overlay', client: { kind: 'overlay', instanceId: 'i1' } },
       });
     });
     expect(transport.ofType('event')).toHaveLength(1);

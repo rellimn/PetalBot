@@ -1,4 +1,8 @@
-import { useState } from 'react';
+/**
+ * Interim overlay (M4r1): shows one counter, kept live by patching the cached result from each
+ * `counter.changed` event. M4r2 moves the live options into the client definition and documents
+ * this file fully.
+ */
 import {
   createOverlayClient,
   defineOverlay,
@@ -12,16 +16,20 @@ import styles from './display.module.css';
 const display = createOverlayClient(counterContract, 'display');
 
 function Display({ config }: OverlayProps<OverlayConfig<typeof counterContract, 'display'>>) {
-  const current = display.useRpc('counter.get', {});
-  const [live, setLive] = useState<number | null>(null);
-  display.useEvent('counter.changed', (event) => {
-    setLive(event.payload.value);
-  });
-  const value = live ?? current.data?.value;
+  const current = display.useRpc(
+    'counter.get',
+    { counter: config.counter },
+    {
+      update: {
+        'counter.changed': (data, event) =>
+          data?.id === event.payload.counter ? { ...data, value: event.payload.value } : data,
+      },
+    },
+  );
   return (
     <div className={styles.display} data-size={config.size}>
-      <span className={styles.label}>{config.label}</span>
-      <span className={styles.value}>{value ?? '–'}</span>
+      <span className={styles.label}>{current.data?.name ?? 'Counter'}</span>
+      <span className={styles.value}>{current.data?.value ?? '–'}</span>
     </div>
   );
 }

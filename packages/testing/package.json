@@ -15,6 +15,10 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@petalbot/tooling": "workspace:*"
+    "@petalbot/tooling": "workspace:*",
+    "drizzle-orm": "^0.45.4"
+  },
+  "peerDependencies": {
+    "vitest": "^5.0.3"
   }
 }
