@@ -1,5 +1,9 @@
 // @vitest-environment happy-dom
-/** Overlay test: the OBS display follows its counter live and hides it once it's deleted. */
+/**
+ * Overlay test: the OBS display follows its counter live and hides it once it's deleted.
+ *
+ * Guide: docs/plugin-guide.md#8-testing.
+ */
 import { act, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { renderPluginUi } from '@petalbot/testing/ui';

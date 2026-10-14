@@ -6,7 +6,7 @@ import type { AnyPluginDefinition, PanelUser } from '@petalbot/sdk';
 import { resolveConfig, type ResolvedConfig } from '../../src/server/config.ts';
 import { SESSION_COOKIE } from '../../src/server/http/cookies.ts';
 import { createServices, type Services } from '../../src/server/services.ts';
-import { createMemoryLogger } from '../helpers.ts';
+import { createMemoryLogger, writeBuild } from '../helpers.ts';
 import { ownerUser } from './fixtures.ts';
 
 export const ORIGIN = 'http://127.0.0.1:8080';
@@ -25,9 +25,9 @@ export function testConfig(
 }
 
 export interface PanelFiles {
-  /** Manifest `entries.panel`, relative to the plugin folder. */
+  /** Build marker `entries.panel`, relative to the plugin folder. */
   readonly entry: string;
-  /** Manifest `entries.overlays`. */
+  /** Build marker `entries.overlays`. */
   readonly overlays?: Readonly<Record<string, string>>;
   /** Relative path -> content. */
   readonly files: Readonly<Record<string, string>>;
@@ -38,6 +38,7 @@ export async function writePlugin(
   id: string,
   dependencies: Readonly<Record<string, string>> = {},
   panel?: PanelFiles,
+  overlays: Readonly<Record<string, string>> = {},
 ): Promise<void> {
   const dir = join(root, id);
   await mkdir(dir, { recursive: true });
@@ -46,18 +47,13 @@ export async function writePlugin(
     JSON.stringify({
       name: id,
       version: '1.0.0',
-      petalbot: {
-        id,
-        apiVersion: 1,
-        entries: {
-          server: 'server.js',
-          ...(panel ? { panel: panel.entry } : {}),
-          ...(panel?.overlays ? { overlays: panel.overlays } : {}),
-        },
-        dependencies,
-      },
+      petalbot: { id, apiVersion: 1, dependencies },
     }),
   );
+  await writeBuild(dir, {
+    ...(panel ? { panel: panel.entry } : {}),
+    overlays: { ...overlays, ...panel?.overlays },
+  });
   for (const [path, content] of Object.entries(panel?.files ?? {})) {
     await mkdir(dirname(join(dir, path)), { recursive: true });
     await writeFile(join(dir, path), content);
@@ -102,6 +98,8 @@ export interface TestServerOptions {
   readonly now?: () => number;
   readonly allowInsecureOidc?: boolean;
   readonly panels?: Readonly<Record<string, PanelFiles>>;
+  /** Default false: the server tests expect new plugins to start disabled. */
+  readonly startNewPlugins?: boolean;
 }
 
 /** Real services on an in-memory database; plugins come from `definitions`. */
@@ -112,7 +110,14 @@ export async function createTestServer(options: TestServerOptions = {}): Promise
     const dependencies = Object.fromEntries(
       (definition.dependencies ?? []).map((contract) => [contract.id, `^${contract.version}`]),
     );
-    await writePlugin(root, id, dependencies, options.panels?.[id]);
+    // Every overlay the contract declares gets an entry, so such contracts still load.
+    const overlays = Object.fromEntries(
+      Object.keys(definition.contract.overlays ?? {}).map((name) => [
+        name,
+        `dist/overlays/${name}/${name}.js`,
+      ]),
+    );
+    await writePlugin(root, id, dependencies, options.panels?.[id], overlays);
   }
   const services = createServices({
     config: testConfig({ pluginDirs: [root], ...options.config }, options.env),
@@ -124,6 +129,7 @@ export async function createTestServer(options: TestServerOptions = {}): Promise
         : Promise.reject(new Error(`no definition for ${plugin.id}`));
     },
     allowInsecureOidc: options.allowInsecureOidc ?? false,
+    startNewPlugins: options.startNewPlugins ?? false,
     ...(options.now ? { now: options.now } : {}),
   });
   await services.manager.start();

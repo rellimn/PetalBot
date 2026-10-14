@@ -25,12 +25,12 @@ export const manifestSchema = z.object({
       (version) => SUPPORTED_API_VERSIONS.includes(version),
       `is not supported (supported: ${SUPPORTED_API_VERSIONS.join(', ')})`,
     ),
-  entries: z.object({
-    contract: z.string().optional(),
-    server: z.string(),
-    panel: z.string().optional(),
-    overlays: z.record(z.string(), z.string()).optional(),
-  }),
+  // Moved to dist/build.json, which the build writes. Kept as a field to explain the change.
+  entries: z
+    .never({
+      error: '"entries" is no longer used: the build writes them to dist/build.json. Remove it',
+    })
+    .optional(),
   dependencies: dependencyMap,
   optionalDependencies: dependencyMap,
 });

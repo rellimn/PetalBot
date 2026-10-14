@@ -3,25 +3,32 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { discoverPlugins } from '../src/loader/discovery.ts';
+import { writeBuild } from './helpers.ts';
 
 async function root(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'petalbot-plugins-'));
 }
 
-async function writePackage(dir: string, name: string, content: unknown): Promise<string> {
+async function writePackage(
+  dir: string,
+  name: string,
+  content: unknown,
+  build: Parameters<typeof writeBuild>[1] | null = { server: 'dist/server.js' },
+): Promise<string> {
   const pluginDir = join(dir, name);
   await mkdir(pluginDir, { recursive: true });
   await writeFile(
     join(pluginDir, 'package.json'),
     typeof content === 'string' ? content : JSON.stringify(content),
   );
+  if (build) await writeBuild(pluginDir, build);
   return pluginDir;
 }
 
 const manifest = (id: string, extra: Record<string, unknown> = {}) => ({
   name: `@petalbot-plugin/${id}`,
   version: '1.2.3',
-  petalbot: { id, apiVersion: 1, entries: { server: 'dist/server.js' }, ...extra },
+  petalbot: { id, apiVersion: 1, ...extra },
 });
 
 describe('discoverPlugins', () => {
@@ -39,13 +46,8 @@ describe('discoverPlugins', () => {
       id: 'quotes',
       version: '1.2.3',
       dir: quotesDir,
-      manifest: {
-        id: 'quotes',
-        apiVersion: 1,
-        entries: { server: 'dist/server.js' },
-        dependencies: {},
-        optionalDependencies: {},
-      },
+      manifest: { id: 'quotes', apiVersion: 1, dependencies: {}, optionalDependencies: {} },
+      entries: { server: 'dist/server.js', overlays: {} },
     });
   });
 
@@ -99,5 +101,66 @@ describe('discoverPlugins', () => {
     const result = await discoverPlugins([dir]);
     expect(result.problems).toEqual([]);
     expect(result.plugins.get('quotes')?.dir).toBe(join(dir, 'quotes'));
+  });
+
+  it('reads the entries from the build marker', async () => {
+    const dir = await root();
+    await writePackage(dir, 'quotes', manifest('quotes'), {
+      server: 'dist/server/server.js',
+      panel: 'dist/panel/panel.js',
+      overlays: { box: 'dist/overlays/box/box.js' },
+    });
+    const result = await discoverPlugins([dir]);
+    expect(result.plugins.get('quotes')?.entries).toEqual({
+      server: 'dist/server/server.js',
+      panel: 'dist/panel/panel.js',
+      overlays: { box: 'dist/overlays/box/box.js' },
+    });
+  });
+
+  it('reports plugins that are not built, or built by an older tooling', async () => {
+    const dir = await root();
+    const unbuilt = await writePackage(dir, 'unbuilt', manifest('unbuilt'), null);
+    const old = await writePackage(dir, 'old', manifest('old'), null);
+    await mkdir(join(old, 'dist'));
+    await writeFile(join(old, 'dist', 'build.json'), JSON.stringify({ builtAt: 1 }));
+    const noServer = await writePackage(dir, 'no-server', manifest('no-server'), null);
+    await mkdir(join(noServer, 'dist'));
+    await writeFile(
+      join(noServer, 'dist', 'build.json'),
+      JSON.stringify({ builtAt: 1, entries: { overlays: {} } }),
+    );
+    const result = await discoverPlugins([dir]);
+    expect([...result.plugins.keys()]).toEqual([]);
+    const byDir = new Map(result.problems.map((p) => [p.dir, p.message]));
+    expect(byDir.get(unbuilt)).toMatch(/^Not built: dist\/build.json is missing/);
+    expect(byDir.get(old)).toMatch(/^Not built: dist\/build.json is invalid .*rebuild/s);
+    expect(byDir.get(noServer)).toMatch(/^Not built: dist\/build.json names no server entry/);
+  });
+
+  it('refuses entries outside the plugin folder', async () => {
+    const dir = await root();
+    const escaping = await writePackage(dir, 'escaping', manifest('escaping'), {
+      server: '../elsewhere/server.js',
+    });
+    const result = await discoverPlugins([dir]);
+    expect(result.problems).toEqual([
+      {
+        dir: escaping,
+        message: 'dist/build.json: the entry ../elsewhere/server.js is outside the plugin folder',
+      },
+    ]);
+  });
+
+  it('tells authors to remove entries from package.json', async () => {
+    const dir = await root();
+    const legacy = await writePackage(
+      dir,
+      'legacy',
+      manifest('legacy', { entries: { server: 'dist/server.js' } }),
+    );
+    const result = await discoverPlugins([dir]);
+    expect(result.problems[0]?.dir).toBe(legacy);
+    expect(result.problems[0]?.message).toMatch(/entries.*no longer used/s);
   });
 });

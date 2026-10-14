@@ -59,7 +59,7 @@ export async function readPluginBundles(
       return undefined;
     }
   };
-  const { panel: panelEntry, overlays: overlayEntries = {} } = plugin.manifest.entries;
+  const { panel: panelEntry, overlays: overlayEntries } = plugin.entries;
   const panel = panelEntry === undefined ? undefined : await read('panel', panelEntry);
   const overlays = new Map<string, BundleSnapshot>();
   for (const name of Object.keys(overlayEntries).sort()) {
@@ -90,7 +90,7 @@ async function readSnapshot(
     // Serving the plugin folder itself would hand out its sources, dotfiles and secrets.
     throw new Error(`entry ${declared} must be in a subfolder (e.g. dist/panel/)`);
   }
-  const serverPath = await realpath(resolve(plugin.dir, plugin.manifest.entries.server)).catch(
+  const serverPath = await realpath(resolve(plugin.dir, plugin.entries.server)).catch(
     () => undefined,
   );
   if (serverPath !== undefined && isInside(dir, serverPath)) {

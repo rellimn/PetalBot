@@ -11,7 +11,7 @@ import { openDatabase, type Sqlite } from '../src/storage/database.ts';
 import { PluginStateStore } from '../src/storage/plugin-state-store.ts';
 import { createStorage } from '../src/storage/storage.ts';
 import { randomBytes } from 'node:crypto';
-import { counterContract, createMemoryLogger, listenerContract } from './helpers.ts';
+import { counterContract, createMemoryLogger, listenerContract, writeBuild } from './helpers.ts';
 
 const brokenContract = defineContract({ id: 'broken', version: '1.0.0' });
 
@@ -27,13 +27,19 @@ async function writeManifest(
     JSON.stringify({
       name: id,
       version: '1.0.0',
-      petalbot: { id, apiVersion: 1, entries: { server: 'server.js' }, dependencies },
+      petalbot: { id, apiVersion: 1, dependencies },
     }),
   );
+  await writeBuild(dir);
 }
 
 async function setup(
-  options: { listenerRange?: string; sqlite?: Sqlite; maxBundleBytes?: number } = {},
+  options: {
+    listenerRange?: string;
+    sqlite?: Sqlite;
+    maxBundleBytes?: number;
+    startNewPlugins?: boolean;
+  } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), 'petalbot-manager-'));
   await writeManifest(root, 'counter');
@@ -77,6 +83,7 @@ async function setup(
     roots: [root],
     logger: createMemoryLogger(),
     ...(options.maxBundleBytes === undefined ? {} : { maxBundleBytes: options.maxBundleBytes }),
+    ...(options.startNewPlugins === undefined ? {} : { startNewPlugins: options.startNewPlugins }),
     load: (plugin) => {
       loadScopes.push(currentPlugin());
       const definition = definitions[plugin.id];
@@ -327,18 +334,7 @@ describe('PluginManager UI facts', () => {
 
   it('reports the panel bundle of running plugins only', async () => {
     const { manager, root } = await setup();
-    await writeFile(
-      join(root, 'counter', 'package.json'),
-      JSON.stringify({
-        name: 'counter',
-        version: '1.0.0',
-        petalbot: {
-          id: 'counter',
-          apiVersion: 1,
-          entries: { server: 'server.js', panel: 'dist/panel/panel.js' },
-        },
-      }),
-    );
+    await writeBuild(join(root, 'counter'), { panel: 'dist/panel/panel.js' });
     await mkdir(join(root, 'counter', 'dist', 'panel'), { recursive: true });
     await writeFile(join(root, 'counter', 'dist', 'panel', 'panel.js'), 'export default 1;');
     await writeFile(join(root, 'counter', 'dist', 'panel', 'panel.css'), '.a{}');
@@ -359,18 +355,7 @@ describe('PluginManager UI facts', () => {
 
   it('refuses to start a plugin whose bundles are too large, without running setup', async () => {
     const { manager, root, calls } = await setup({ maxBundleBytes: 100 });
-    await writeFile(
-      join(root, 'counter', 'package.json'),
-      JSON.stringify({
-        name: 'counter',
-        version: '1.0.0',
-        petalbot: {
-          id: 'counter',
-          apiVersion: 1,
-          entries: { server: 'server.js', panel: 'dist/panel/panel.js' },
-        },
-      }),
-    );
+    await writeBuild(join(root, 'counter'), { panel: 'dist/panel/panel.js' });
     await mkdir(join(root, 'counter', 'dist', 'panel'), { recursive: true });
     await writeFile(join(root, 'counter', 'dist', 'panel', 'panel.js'), 'x'.repeat(200));
     await manager.start();
@@ -381,21 +366,100 @@ describe('PluginManager UI facts', () => {
 
   it('starts a plugin whose panel is not built, without a bundle', async () => {
     const { manager, root } = await setup();
-    await writeFile(
-      join(root, 'counter', 'package.json'),
-      JSON.stringify({
-        name: 'counter',
-        version: '1.0.0',
-        petalbot: {
-          id: 'counter',
-          apiVersion: 1,
-          entries: { server: 'server.js', panel: 'dist/panel/panel.js' },
-        },
-      }),
-    );
+    await writeBuild(join(root, 'counter'), { panel: 'dist/panel/panel.js' });
     await manager.start();
     await manager.enable('counter');
     expect(manager.get('counter')).toMatchObject({ state: 'running', hasPanel: true });
     expect(manager.get('counter').panel).toBeUndefined();
+  });
+
+  it('refuses to start a plugin whose contract declares an overlay that was not built', async () => {
+    const { manager, definitions, calls } = await setup();
+    definitions.counter = definePlugin(
+      defineContract({
+        ...counterContract,
+        overlays: { box: { config: z.object({}), events: [], rpc: [] } },
+      }),
+      {
+        setup() {
+          calls.push('counter');
+          return { rpc: { double: ({ n }) => n * 2 } };
+        },
+      },
+    );
+    await manager.start();
+    await expect(manager.enable('counter')).rejects.toThrow(
+      'Overlay "box" is declared in the contract but was not built (src/overlays/box.tsx)',
+    );
+    expect(calls).not.toContain('counter');
+  });
+
+  it('starts plugins seen for the first time when startNewPlugins is set', async () => {
+    const { manager, sqlite } = await setup({ startNewPlugins: true });
+    await manager.start();
+    expect(manager.list().map((p) => [p.id, p.state, p.enabled])).toEqual([
+      ['broken', 'failed', true],
+      ['counter', 'running', true],
+      ['listener', 'running', true],
+    ]);
+    expect(new PluginStateStore(sqlite).has('counter')).toBe(true);
+  });
+
+  it('never re-enables a plugin the user disabled', async () => {
+    const sqlite = openDatabase(':memory:');
+    new PluginStateStore(sqlite).setEnabled('counter', false);
+    const { manager } = await setup({ sqlite, startNewPlugins: true });
+    await manager.start();
+    expect(manager.get('counter')).toMatchObject({ state: 'disabled', enabled: false });
+    await manager.rescan();
+    expect(manager.get('counter')).toMatchObject({ state: 'disabled', enabled: false });
+  });
+
+  it('starts a plugin that appears on a rescan', async () => {
+    const { manager, root, definitions } = await setup({ startNewPlugins: true });
+    await manager.start();
+    definitions.quotes = definePlugin(defineContract({ id: 'quotes', version: '1.0.0' }), {
+      setup: () => undefined,
+    });
+    await writeManifest(root, 'quotes');
+    await manager.rescan();
+    expect(manager.get('quotes')).toMatchObject({ state: 'running', enabled: true });
+  });
+
+  it('leaves new plugins disabled without startNewPlugins', async () => {
+    const { manager, sqlite } = await setup();
+    await manager.start();
+    expect(manager.get('counter')).toMatchObject({ state: 'disabled', enabled: false });
+    expect(new PluginStateStore(sqlite).has('counter')).toBe(false);
+  });
+
+  it('starts a plugin stored as enabled when a rescan finds it again', async () => {
+    const { manager, root, sqlite } = await setup({ startNewPlugins: true });
+    await rm(join(root, 'counter'), { recursive: true });
+    await rm(join(root, 'listener'), { recursive: true });
+    new PluginStateStore(sqlite).setEnabled('counter', true);
+    await manager.start();
+    expect(manager.list().map((p) => p.id)).toEqual(['broken']);
+    await writeManifest(root, 'counter');
+    await manager.rescan();
+    expect(manager.get('counter')).toMatchObject({ state: 'running', enabled: true });
+  });
+
+  it('reads the build marker again when it starts a plugin', async () => {
+    const { manager, root } = await setup();
+    await manager.start();
+    await manager.enable('counter');
+    expect(manager.get('counter').hasPanel).toBe(false);
+    await mkdir(join(root, 'counter', 'dist', 'panel'), { recursive: true });
+    await writeFile(join(root, 'counter', 'dist', 'panel', 'panel.js'), 'export default 1;');
+    await writeBuild(join(root, 'counter'), { panel: 'dist/panel/panel.js' });
+    await manager.reload('counter');
+    expect(manager.get('counter').hasPanel).toBe(true);
+    expect(manager.panelSnapshot('counter')).toBeDefined();
+    await writeFile(join(root, 'counter', 'dist', 'build.json'), JSON.stringify({ builtAt: 1 }));
+    await expect(manager.reload('counter')).rejects.toThrow(
+      /^Not built: dist\/build.json is invalid/,
+    );
+    expect(manager.get('counter').state).toBe('failed');
   });
 });

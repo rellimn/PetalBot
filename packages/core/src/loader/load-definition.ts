@@ -8,7 +8,7 @@ let generation = 0;
 
 /** Imports the plugin's server entry (fresh on every call) and checks it against the manifest. */
 export async function loadDefinition(plugin: DiscoveredPlugin): Promise<AnyPluginDefinition> {
-  const file = resolve(plugin.dir, plugin.manifest.entries.server);
+  const file = resolve(plugin.dir, plugin.entries.server);
   generation += 1;
   let module: unknown;
   try {

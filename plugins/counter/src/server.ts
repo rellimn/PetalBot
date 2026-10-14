@@ -4,6 +4,7 @@
  * Runs in Node inside the PetalBot core. It may import the contract, the Drizzle schema and
  * Node built-ins; panel and overlay code never import this file.
  *
+ * Guide: docs/plugin-guide.md#4-the-server.
  * Read next: src/client.ts.
  */
 import { randomUUID } from 'node:crypto';
@@ -30,7 +31,8 @@ export default definePlugin(counterContract, {
 
     /** Announces a changed value and builds the RPC result. */
     const changed = (row: Row, by: string) => {
-      // Emit after the write: anyone reacting to the event must already see the new value.
+      // Emit after the write: anyone reacting to the event must already see the new value
+      // (see docs/plugin-guide.md#10-watch-out-for).
       ctx.emit('counter.changed', { counter: row.id, value: row.value, by });
       return ok({ counter: toCounter(row) });
     };
@@ -52,7 +54,7 @@ export default definePlugin(counterContract, {
         increment: ({ counter }, { who }) => {
           // One UPDATE … RETURNING statement reads and writes the value. Nothing can run in
           // between, unlike "read the value, await something, write value + step", which loses
-          // clicks when two arrive at once.
+          // clicks when two arrive at once (see docs/plugin-guide.md#10-watch-out-for).
           // Drizzle types `.get()` as always finding a row, but it's undefined when none matched.
           const row = ctx.db
             .update(counters)

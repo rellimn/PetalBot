@@ -779,7 +779,7 @@
                     },
                     "hasPanel": {
                       "type": "boolean",
-                      "description": "The manifest declares a panel entry"
+                      "description": "The build has a panel entry"
                     },
                     "hasSettings": {
                       "description": "Absent until the core has loaded the plugin definition",

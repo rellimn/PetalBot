@@ -11,14 +11,7 @@
   },
   "petalbot": {
     "id": "counter",
-    "apiVersion": 1,
-    "entries": {
-      "server": "dist/server/server.js",
-      "panel": "dist/panel/panel.js",
-      "overlays": {
-        "display": "dist/overlays/display/display.js"
-      }
-    }
+    "apiVersion": 1
   },
   "dependencies": {
     "@petalbot/sdk": "workspace:*",

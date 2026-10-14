@@ -5,6 +5,7 @@
  * state. Its client may only use what the contract's overlay declaration lists
  * (counter.get, counter.changed, counter.listChanged); the server enforces that as well.
  *
+ * Guide: docs/plugin-guide.md#7-overlays.
  * Read next: test/server.test.ts.
  */
 import {

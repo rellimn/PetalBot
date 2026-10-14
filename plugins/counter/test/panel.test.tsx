@@ -3,6 +3,8 @@
  * Panel tests for the counter: the page and the widget, rendered with @petalbot/testing/ui
  * against a fake server. `server.answer` plays the server's side of an RPC, `server.emit` sends
  * an event, so these tests show how live queries react.
+ *
+ * Guide: docs/plugin-guide.md#8-testing.
  */
 import { act, screen, waitFor } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';

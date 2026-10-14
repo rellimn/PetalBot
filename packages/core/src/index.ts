@@ -49,3 +49,4 @@ export {
   type FileWatch,
   type ReloadTarget,
 } from './dev-reloader.ts';
+export { RESERVED_IDS } from './loader/manifest.ts';

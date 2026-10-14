@@ -28,6 +28,8 @@ export interface ServicesOptions {
   readonly now?: () => number;
   /** The ring the logger's sink writes to. Default: an empty ring. */
   readonly logs?: LogRing;
+  /** Enable plugins seen for the first time. Default: `config.dev`. */
+  readonly startNewPlugins?: boolean;
 }
 
 export interface Services {
@@ -61,9 +63,12 @@ export function createServices(options: ServicesOptions): Services {
     sqlite,
     roots: config.pluginDirs,
     logger,
+    startNewPlugins: options.startNewPlugins ?? config.dev,
     ...(options.load ? { load: options.load } : {}),
   });
-  const devReloader = config.dev ? new DevReloader({ manager, logger }) : undefined;
+  const devReloader = config.dev
+    ? new DevReloader({ manager, logger, roots: config.pluginDirs })
+    : undefined;
   const sessions = new SessionStore(sqlite, clock);
   const overlays = new OverlayInstanceStore(sqlite, clock);
   const users = new UserStore(sqlite, clock);

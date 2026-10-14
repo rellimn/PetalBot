@@ -1,3 +1,5 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { z } from 'zod';
 import { defineContract, type LogData, type Logger } from '@petalbot/sdk';
 
@@ -61,3 +63,22 @@ export const delay = (ms: number): Promise<void> =>
   new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+
+/** Writes `<dir>/dist/build.json` the way `petalbotPlugin()` does. Default server entry: `server.js`. */
+export async function writeBuild(
+  dir: string,
+  entries: { server?: string; panel?: string; overlays?: Record<string, string> } = {},
+): Promise<void> {
+  await mkdir(join(dir, 'dist'), { recursive: true });
+  await writeFile(
+    join(dir, 'dist', 'build.json'),
+    JSON.stringify({
+      builtAt: 1,
+      entries: {
+        server: entries.server ?? 'server.js',
+        ...(entries.panel === undefined ? {} : { panel: entries.panel }),
+        overlays: entries.overlays ?? {},
+      },
+    }),
+  );
+}

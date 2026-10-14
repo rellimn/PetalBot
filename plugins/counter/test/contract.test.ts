@@ -1,6 +1,8 @@
 /**
  * Contract tests: the parts of the contract that are plain data (defaults, choice fields).
  * Behavior is tested in server.test.ts.
+ *
+ * Guide: docs/plugin-guide.md#8-testing.
  */
 import { describe, expect, it } from 'vitest';
 import { choiceOf } from '@petalbot/sdk';

@@ -18,10 +18,10 @@ async function pluginWith(
     manifest: {
       id: 'hello',
       apiVersion: 1,
-      entries: { server: 'server.js' },
       dependencies: manifest.dependencies ?? {},
       optionalDependencies: {},
     },
+    entries: { server: 'server.js', overlays: {} },
   };
 }
 

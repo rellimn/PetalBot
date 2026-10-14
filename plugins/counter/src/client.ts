@@ -2,9 +2,11 @@
  * The counter's panel client: one typed handle per RPC and event, `api.counter.<member>`.
  *
  * Runs in the panel. Created once at module scope: the React Compiler needs the hooks behind it
- * to be the same functions on every render. The definition decides, once for every component,
- * which RPCs are read (`queries`) and how they stay fresh; everything else is a mutation.
+ * to be the same functions on every render (see docs/plugin-guide.md#10-watch-out-for). The
+ * definition decides, once for every component, which RPCs are read (`queries`) and how they
+ * stay fresh; everything else is a mutation.
  *
+ * Guide: docs/plugin-guide.md#5-the-client.
  * Read next: src/panel.tsx.
  */
 import { createPluginClient } from '@petalbot/ui-sdk';
@@ -13,7 +15,8 @@ import { counterContract } from './contract.ts';
 export const api = createPluginClient(counterContract, {
   queries: {
     // `update` computes the new list from the event: no round trip per click. It must return
-    // a new array (never mutate), because the cache and the React Compiler compare by reference.
+    // a new array (never mutate), because the cache and the React Compiler compare by reference
+    // (see docs/plugin-guide.md#10-watch-out-for).
     'counter.list': {
       refreshOn: ['counter.listChanged'],
       update: {

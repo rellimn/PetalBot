@@ -2,6 +2,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { errorMessage } from '../names.ts';
+import { readBuildInfo, type PluginEntries } from './build-info.ts';
 import { packageSchema, type PluginManifest } from './manifest.ts';
 
 export interface DiscoveredPlugin {
@@ -10,6 +11,8 @@ export interface DiscoveredPlugin {
   readonly version: string;
   readonly dir: string;
   readonly manifest: PluginManifest;
+  /** From `dist/build.json`. */
+  readonly entries: PluginEntries;
 }
 
 export interface DiscoveryProblem {
@@ -79,10 +82,13 @@ async function readPlugin(dir: string): Promise<DiscoveredPlugin | DiscoveryProb
   if (!parsed.success) {
     return { dir, message: `Invalid PetalBot manifest: ${z.prettifyError(parsed.error)}` };
   }
+  const entries = await readBuildInfo(dir);
+  if ('message' in entries) return { dir, message: entries.message };
   return {
     id: parsed.data.petalbot.id,
     version: parsed.data.version,
     dir,
     manifest: parsed.data.petalbot,
+    entries,
   };
 }

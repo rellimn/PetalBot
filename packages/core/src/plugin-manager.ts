@@ -8,6 +8,7 @@ import {
   type DiscoveryProblem,
 } from './loader/discovery.ts';
 import { resolveGraph, type GraphNode } from './loader/graph.ts';
+import { readBuildInfo } from './loader/build-info.ts';
 import { loadDefinition } from './loader/load-definition.ts';
 import { readPluginBundles, type BundleSnapshot, type PluginBundles } from './loader/bundles.ts';
 import { errorMessage } from './names.ts';
@@ -40,7 +41,7 @@ export interface PluginInfo {
   readonly error?: string;
   readonly dependencies: readonly string[];
   readonly optionalDependencies: readonly string[];
-  /** The manifest declares a panel entry. */
+  /** The build has a panel entry. */
   readonly hasPanel: boolean;
   /** Known once the core has loaded the plugin's definition (running, or read for its settings). */
   readonly hasSettings?: boolean;
@@ -68,6 +69,11 @@ export interface PluginManagerOptions {
   readonly load?: (plugin: DiscoveredPlugin) => Promise<AnyPluginDefinition>;
   /** Cap for all browser bundles of one plugin. Default 20 MiB. */
   readonly maxBundleBytes?: number;
+  /**
+   * Dev: a plugin with no stored enabled/disabled choice is enabled when discovered (on start and
+   * on rescans). Default false: new plugins start disabled.
+   */
+  readonly startNewPlugins?: boolean;
 }
 
 interface Status {
@@ -88,6 +94,7 @@ export class PluginManager {
   readonly #definitions = new Map<string, AnyPluginDefinition>();
   readonly #bundles = new Map<string, PluginBundles>();
   readonly #maxBundleBytes: number | undefined;
+  readonly #startNewPlugins: boolean;
   readonly #listeners = new Set<(info: PluginInfo) => void>();
   #plugins = new Map<string, DiscoveredPlugin>();
   #problems = new Map<string, string>();
@@ -104,6 +111,7 @@ export class PluginManager {
     this.#load = options.load ?? loadDefinition;
     this.#store = new PluginStateStore(options.sqlite);
     this.#maxBundleBytes = options.maxBundleBytes;
+    this.#startNewPlugins = options.startNewPlugins ?? false;
     this.#unsubscribeHealth = options.kernel.onHealthChange((pluginId) => {
       this.#notify(pluginId);
     });
@@ -119,9 +127,18 @@ export class PluginManager {
     });
   }
 
-  /** Re-reads manifests. Running plugins keep their loaded code until reloaded. */
+  /**
+   * Re-reads manifests. Running plugins keep their loaded code until reloaded. Plugins that
+   * (re)appear start when they are enabled; with `startNewPlugins`, plugins seen for the first
+   * time are enabled.
+   */
   rescan(): Promise<void> {
-    return this.#serialize(() => this.#scan());
+    return this.#serialize(async () => {
+      const appeared = await this.#scan();
+      for (const id of this.#order) {
+        if (appeared.includes(id) && this.#store.isEnabled(id)) await this.#startOne(id);
+      }
+    });
   }
 
   list(): PluginInfo[] {
@@ -304,7 +321,8 @@ export class PluginManager {
     return run;
   }
 
-  async #scan(): Promise<void> {
+  /** Returns the plugins that were not known before this scan. */
+  async #scan(): Promise<string[]> {
     const discovery = await discoverPlugins(this.#roots);
     this.#discoveryProblems = discovery.problems;
     for (const problem of discovery.problems) {
@@ -328,6 +346,7 @@ export class PluginManager {
     );
     const graph = resolveGraph(nodes);
     const removed = [...this.#plugins.keys()].filter((id) => !plugins.has(id));
+    const previous = new Set(this.#plugins.keys());
     this.#plugins = plugins;
     // Stopped plugins may have new code on disk; running ones keep theirs until reloaded.
     for (const id of [...this.#definitions.keys()]) {
@@ -341,6 +360,14 @@ export class PluginManager {
         } catch (error) {
           this.#logger.error('Plugin removal listener failed', { error: errorMessage(error) });
         }
+      }
+    }
+    const appeared = [...plugins.keys()].filter((id) => !previous.has(id));
+    if (this.#startNewPlugins) {
+      for (const id of appeared) {
+        if (this.#store.has(id)) continue;
+        this.#store.setEnabled(id, true);
+        this.#logger.info('Enabled a new plugin (dev)', { plugin: id });
       }
     }
     this.#problems = new Map(graph.problems);
@@ -364,11 +391,12 @@ export class PluginManager {
         this.#set(id, next);
       }
     }
+    return appeared;
   }
 
   async #startOne(pluginId: string): Promise<void> {
     if (this.#kernel.isRunning(pluginId)) return;
-    const plugin = this.#require(pluginId);
+    let plugin = this.#require(pluginId);
     const problem = this.#problems.get(pluginId);
     if (problem !== undefined) {
       this.#set(pluginId, { state: 'failed', error: problem, source: 'graph' });
@@ -385,7 +413,26 @@ export class PluginManager {
     }
     this.#set(pluginId, { state: 'starting' });
     try {
+      // The build may have changed the entries since the scan (a rebuild before a reload).
+      const entries = await readBuildInfo(plugin.dir);
+      if ('message' in entries) throw new Error(entries.message);
+      plugin = { ...plugin, entries };
+      this.#plugins.set(pluginId, plugin);
       const definition = await runInPlugin(pluginId, () => this.#load(plugin));
+      // Before setup: a declared overlay without a bundle would leave its instances blank.
+      const unbuilt = Object.keys(definition.contract.overlays ?? {}).filter(
+        (name) => !Object.hasOwn(plugin.entries.overlays, name),
+      );
+      if (unbuilt.length > 0) {
+        throw new Error(
+          unbuilt
+            .map(
+              (name) =>
+                `Overlay "${name}" is declared in the contract but was not built (src/overlays/${name}.tsx)`,
+            )
+            .join('; '),
+        );
+      }
       // Before setup: an oversized bundle refuses the start without running plugin code.
       const bundles = await readPluginBundles(plugin, this.#maxBundleBytes);
       for (const problem of bundles.problems) {
@@ -498,7 +545,7 @@ export class PluginManager {
       ...(status.error === undefined ? {} : { error: status.error }),
       dependencies: Object.keys(plugin.manifest.dependencies),
       optionalDependencies: Object.keys(plugin.manifest.optionalDependencies),
-      hasPanel: plugin.manifest.entries.panel !== undefined,
+      hasPanel: plugin.entries.panel !== undefined,
       ...(definition ? { hasSettings: definition.contract.settings !== undefined } : {}),
       ...(bundle
         ? {

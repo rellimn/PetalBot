@@ -5,6 +5,7 @@
  * @petalbot/ui-sdk, never server code. Components use ui-sdk components and this file's CSS
  * module (no Tailwind), so they follow the user's color scheme and density.
  *
+ * Guide: docs/plugin-guide.md#6-the-panel.
  * Read next: src/overlays/display.tsx.
  */
 import { useState } from 'react';

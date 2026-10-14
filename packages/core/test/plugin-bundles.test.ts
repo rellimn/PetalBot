@@ -18,16 +18,11 @@ async function pluginWith(
     id: 'quotes',
     version: '1.0.0',
     dir,
-    manifest: {
-      id: 'quotes',
-      apiVersion: 1,
-      entries: {
-        server: entries.server ?? 'dist/server/server.js',
-        ...(entries.panel === undefined ? {} : { panel: entries.panel }),
-        ...(entries.overlays === undefined ? {} : { overlays: entries.overlays }),
-      },
-      dependencies: {},
-      optionalDependencies: {},
+    manifest: { id: 'quotes', apiVersion: 1, dependencies: {}, optionalDependencies: {} },
+    entries: {
+      server: entries.server ?? 'dist/server/server.js',
+      ...(entries.panel === undefined ? {} : { panel: entries.panel }),
+      overlays: entries.overlays ?? {},
     },
   };
 }

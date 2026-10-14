@@ -8,7 +8,7 @@ Plugins import `@petalbot/sdk` (server and contracts) and `@petalbot/ui-sdk` (pa
 
 ## Package and manifest
 
-A plugin is a workspace package. `package.json` names its entries and its dependencies:
+A plugin is a workspace package. `package.json` names the plugin and its dependencies:
 
 ```jsonc
 {
@@ -18,18 +18,25 @@ A plugin is a workspace package. `package.json` names its entries and its depend
   "petalbot": {
     "id": "alerts", // ^[a-z][a-z0-9-]*$, not "core" or "petalbot"
     "apiVersion": 1,
-    "entries": {
-      "server": "dist/server/server.js",
-      "panel": "dist/panel/panel.js",
-      "overlays": { "box": "dist/overlays/box/box.js" }, // one per overlay the contract declares
-    },
     "dependencies": { "stream": "^1.0.0" }, // ranges match dependency contract versions
     "optionalDependencies": {},
   },
 }
 ```
 
+The entries come from the build: `vite build` writes them to `dist/build.json` (see
+"Building"). A plugin without that file is listed in Admin › Plugins as "Not built". Every
+overlay the contract declares needs a built `src/overlays/<name>.tsx`, or the plugin doesn't
+start.
+
 The ids listed under `dependencies` and `optionalDependencies` must match the contracts passed to `definePlugin`.
+
+## Creating a plugin
+
+`pnpm create-plugin <id> [--no-panel] [--db] [--overlay <name>]…` writes `plugins/<id>/` (a tiny
+working plugin: one setting, a read and a write RPC, one event, a live page and widget, tests),
+installs it, generates the first migration with `--db` and builds it once. A running `pnpm dev`
+picks it up within seconds. [docs/plugin-guide.md](../plugin-guide.md) walks through every file.
 
 ## Contracts: `defineContract`
 
@@ -171,12 +178,15 @@ export default defineConfig({ plugins: petalbotPlugin() });
 - `dist/panel/panel.js` (+ `panel.css`) from `src/panel.tsx`, if that file exists.
 - `dist/overlays/<name>/<name>.js` (+ `<name>.css`) for every `src/overlays/<name>.tsx`. Each
   overlay is its own bundle; file names must be overlay names (`^[a-z][a-z0-9-]*$`).
-- `dist/build.json` once everything is written. `vite build --watch` rewrites it after every
-  successful rebuild, never after a failed one.
+- `dist/build.json` once everything is written: `{ builtAt, entries: { server?, panel?, overlays } }`.
+  The core discovers the plugin's entries from it. `vite build --watch` rewrites it after every
+  successful rebuild, never after a failed one; a new overlay file needs a restart of the watcher.
 
 Browser bundles are built with the React Compiler. With `dev: true` in the config, the core
-reloads a running plugin when its `dist/build.json` changes (and restarts it if it failed).
-Otherwise use Admin › Plugins › Reload.
+reloads a running plugin when its `dist/build.json` changes (and restarts it if it failed), and
+picks up new plugin folders once they're built: plugins with no stored enabled/disabled choice
+start enabled. Without `dev`, new plugins start disabled; use Admin › Plugins › Reload after a
+rebuild.
 
 The core reads the bundle folders into memory when the plugin starts and serves only that copy,
 so a rebuild never mixes old and new files. A bundle folder must not contain the server entry,

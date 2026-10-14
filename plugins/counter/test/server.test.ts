@@ -5,6 +5,8 @@
  * database. It applies the real migrations from drizzle/: it finds the plugin folder by walking
  * up from this file to the package.json with a "petalbot" field. `harness.call` calls RPCs the
  * way another plugin would, and `harness.events` records every event.
+ *
+ * Guide: docs/plugin-guide.md#8-testing.
  */
 import { describe, expect, it } from 'vitest';
 import { ValidationError } from '@petalbot/sdk';

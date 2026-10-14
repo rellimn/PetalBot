@@ -18,7 +18,7 @@ export const pluginInfoSchema = z.object({
   error: z.string().optional(),
   dependencies: z.array(z.string()).readonly(),
   optionalDependencies: z.array(z.string()).readonly(),
-  hasPanel: z.boolean().describe('The manifest declares a panel entry'),
+  hasPanel: z.boolean().describe('The build has a panel entry'),
   hasSettings: z
     .boolean()
     .optional()

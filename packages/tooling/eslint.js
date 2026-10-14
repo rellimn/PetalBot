@@ -36,6 +36,7 @@ export function petalbot({ tsconfigRootDir }) {
         '.idea/**',
         '.superpowers/**',
         'packages/tooling/test/fixtures/**',
+        'packages/create-plugin/.out/**',
       ],
     },
     js.configs.recommended,

@@ -19,6 +19,11 @@ export class PluginStateStore {
     return this.#select.get(pluginId)?.enabled === 1;
   }
 
+  /** Whether a choice was ever stored (the plugin was enabled or disabled at least once). */
+  has(pluginId: string): boolean {
+    return this.#select.get(pluginId) !== undefined;
+  }
+
   setEnabled(pluginId: string, enabled: boolean): void {
     this.#upsert.run(pluginId, enabled ? 1 : 0);
   }

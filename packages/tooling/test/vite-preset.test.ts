@@ -119,10 +119,29 @@ describe('petalbotPlugin', () => {
     expect(existsSync(join(root, 'dist/server/server.js'))).toBe(true);
   });
 
-  it('writes the build marker once a build is complete', async () => {
+  it('writes the build marker with the entries once a build is complete', async () => {
     const root = await build();
     const marker = JSON.parse(await readFile(join(root, BUILD_MARKER), 'utf8')) as unknown;
-    expect(marker).toEqual({ builtAt: expect.any(Number) as number });
+    expect(marker).toEqual({
+      builtAt: expect.any(Number) as number,
+      entries: {
+        server: 'dist/server/server.js',
+        panel: 'dist/panel/panel.js',
+        overlays: {
+          banner: 'dist/overlays/banner/banner.js',
+          'ticker-line': 'dist/overlays/ticker-line/ticker-line.js',
+        },
+      },
+    });
+  });
+
+  it('leaves entries out of the marker that the plugin does not have', async () => {
+    const root = await build({ panel: 'src/missing.tsx', overlays: 'src/none' });
+    const marker = JSON.parse(await readFile(join(root, BUILD_MARKER), 'utf8')) as unknown;
+    expect(marker).toEqual({
+      builtAt: expect.any(Number) as number,
+      entries: { server: 'dist/server/server.js', overlays: {} },
+    });
   });
 
   it(
@@ -150,6 +169,9 @@ describe('petalbotPlugin', () => {
         });
         const marker = join(root, BUILD_MARKER);
         const first = await waitForMarker(marker, undefined);
+        expect(JSON.parse(first)).toMatchObject({
+          entries: { server: 'dist/server/server.js', panel: 'dist/panel/panel.js' },
+        });
         const panel = join(root, 'src/panel.tsx');
         const source = await readFile(panel, 'utf8');
 

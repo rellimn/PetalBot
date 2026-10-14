@@ -32,10 +32,21 @@ const OVERLAY_NAME = /^[a-z][a-z0-9-]*$/;
 const MARKER_QUIET_MS = 50;
 
 /**
- * Written after every complete build (also after each `--watch` rebuild). With `dev: true` the
- * core reloads the plugin when it changes. The core has its own copy of this path.
+ * Written after every complete build (also after each `--watch` rebuild). The core discovers the
+ * plugin's entries from it, and with `dev: true` reloads the plugin when it changes. The core has
+ * its own copy of this path and of the shape below.
  */
 export const BUILD_MARKER = 'dist/build.json';
+
+/** The content of `dist/build.json`. Entry paths are relative to the plugin folder. */
+export interface BuildMarker {
+  readonly builtAt: number;
+  readonly entries: {
+    readonly server?: string;
+    readonly panel?: string;
+    readonly overlays: Readonly<Record<string, string>>;
+  };
+}
 
 const isShared = (id: string): boolean => (SHARED_MODULES as readonly string[]).includes(id);
 
@@ -114,11 +125,14 @@ export function petalbotPlugin(options: PetalbotPluginOptions = {}): PluginOptio
   const failed = new Set<string>();
   let written = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  // Set in `config` from the entries that exist; the marker lists them.
+  let entries: BuildMarker['entries'] = { overlays: {} };
 
   const writeMarker = async (): Promise<void> => {
     const file = resolve(root, BUILD_MARKER);
     await mkdir(dirname(file), { recursive: true });
-    await writeFile(file, `${JSON.stringify({ builtAt: Date.now() })}\n`);
+    const marker: BuildMarker = { builtAt: Date.now(), entries };
+    await writeFile(file, `${JSON.stringify(marker)}\n`);
   };
 
   const plugin: Plugin = {
@@ -127,10 +141,19 @@ export function petalbotPlugin(options: PetalbotPluginOptions = {}): PluginOptio
       root = resolve(config.root ?? process.cwd());
       const external = externalsOf(root);
       const overlays = overlayEntries(root, overlayDir);
+      const hasPanel = existsSync(resolve(root, panelEntry));
+      const hasServer = existsSync(resolve(root, serverEntry));
+      entries = {
+        ...(hasServer ? { server: 'dist/server/server.js' } : {}),
+        ...(hasPanel ? { panel: 'dist/panel/panel.js' } : {}),
+        overlays: Object.fromEntries(
+          overlays.map((name) => [name, `dist/overlays/${name}/${name}.js`]),
+        ),
+      };
       const builds = [
-        ...(existsSync(resolve(root, panelEntry)) ? ['client'] : []),
+        ...(hasPanel ? ['client'] : []),
         ...overlays.map(overlayEnvironment),
-        ...(existsSync(resolve(root, serverEntry)) ? ['server'] : []),
+        ...(hasServer ? ['server'] : []),
       ];
       return {
         builder: {

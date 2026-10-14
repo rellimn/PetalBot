@@ -9,6 +9,7 @@
   "scripts": {
     "start": "node packages/core/src/cli.ts",
     "dev": "node packages/core/scripts/dev.ts",
+    "create-plugin": "node packages/create-plugin/src/cli.ts",
     "preview": "node packages/core/scripts/dev.ts --preview",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r --parallel typecheck",

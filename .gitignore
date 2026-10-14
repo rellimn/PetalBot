@@ -9,3 +9,4 @@ coverage/
 .vscode/*
 npm-debug.log*
 packages/core/dev/secret-key
+packages/create-plugin/.out/

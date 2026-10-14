@@ -5,6 +5,7 @@
  * host. It therefore imports only zod and @petalbot/sdk, never server code such as the Drizzle
  * schema. Names are always qualified ("counter.changed"), here and everywhere else.
  *
+ * Guide: docs/plugin-guide.md#3-the-contract.
  * Read next: src/db/schema.ts.
  */
 import { z } from 'zod';
@@ -15,7 +16,8 @@ import { Choices, Result, choice, defineContract } from '@petalbot/sdk';
  *
  * Deliberately separate from the Drizzle table (src/db/schema.ts): the table is a server detail
  * that can change (new columns, renames) without breaking anyone who depends on this contract.
- * The server maps rows to this shape in one small function (`toCounter`).
+ * The server maps rows to this shape in one small function (`toCounter`). See
+ * docs/plugin-guide.md#3-the-contract.
  */
 export const Counter = z.object({
   id: z.string(),
@@ -54,7 +56,8 @@ export const counterContract = defineContract({
     list: { output: z.array(Counter), expose: { panel: 'mod' } },
     // The values behind choice('counter.options') below: [{ value: id, label: name }].
     options: { output: Choices, expose: { panel: 'mod' } },
-    // null rather than an error: a widget or overlay may point at a counter deleted since.
+    // null rather than an error: a widget or overlay may point at a counter deleted since
+    // (see docs/plugin-guide.md#11-when-to-use-what, Result vs. throwing).
     get: {
       input: CounterRef,
       output: Counter.nullable(),

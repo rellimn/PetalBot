@@ -1,11 +1,12 @@
 import { unwatchFile, watchFile, type Stats } from 'node:fs';
+import { access, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Logger } from '@petalbot/sdk';
+import { BUILD_MARKER } from './loader/build-info.ts';
 import { errorMessage } from './names.ts';
 import type { PluginState } from './plugin-manager.ts';
 
-/** Written by `petalbotPlugin()` after every complete build (same path as @petalbot/tooling's). */
-export const BUILD_MARKER = join('dist', 'build.json');
+export { BUILD_MARKER } from './loader/build-info.ts';
 
 export interface ReloadablePlugin {
   readonly id: string;
@@ -19,6 +20,8 @@ export interface ReloadTarget {
   list(): readonly ReloadablePlugin[];
   reload(pluginId: string): Promise<void>;
   enable(pluginId: string): Promise<void>;
+  /** Re-reads the plugin folders: a new plugin's first build appeared. */
+  rescan(): Promise<void>;
   onChange(listener: (info: ReloadablePlugin) => void): () => void;
   onRemoved(listener: (pluginId: string) => void): () => void;
 }
@@ -47,11 +50,37 @@ export interface DevReloaderOptions {
   readonly watch?: FileWatch;
   /** Quiet time after the last marker change. Default 200 ms. */
   readonly debounceMs?: number;
+  /** Plugin roots: their new folders are watched for a first build. Default: none. */
+  readonly roots?: readonly string[];
+  /** Folder names in a root. Default: subfolders and symlinks; none if unreadable. */
+  readonly listFolders?: (root: string) => Promise<readonly string[]>;
+  /** Default: `fs.access`. */
+  readonly exists?: (file: string) => Promise<boolean>;
+  /** How often the roots are listed. Default 1000 ms. */
+  readonly scanIntervalMs?: number;
 }
+
+const listFoldersOf = async (root: string): Promise<readonly string[]> => {
+  try {
+    const entries = await readdir(root, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+};
+
+const fileExists = (file: string): Promise<boolean> =>
+  access(file).then(
+    () => true,
+    () => false,
+  );
 
 /**
  * With `dev: true`: reloads a running plugin when its build marker changes (and restarts an
- * enabled plugin that failed, so fixing a broken plugin needs no click).
+ * enabled plugin that failed, so fixing a broken plugin needs no click). New folders in the
+ * plugin roots are watched too: their first build triggers a rescan, which picks the plugin up.
  */
 export class DevReloader {
   readonly #manager: ReloadTarget;
@@ -64,12 +93,24 @@ export class DevReloader {
   readonly #inFlight = new Set<string>();
   readonly #pending = new Set<string>();
   #disposers: (() => void)[] = [];
+  readonly #roots: readonly string[];
+  readonly #listFolders: (root: string) => Promise<readonly string[]>;
+  readonly #exists: (file: string) => Promise<boolean>;
+  readonly #scanIntervalMs: number;
+  /** Folders in the roots that are not (yet) known plugins: dir -> stop watching. */
+  readonly #candidates = new Map<string, () => void>();
+  #scanTimer: ReturnType<typeof setInterval> | undefined;
+  #rescanTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(options: DevReloaderOptions) {
     this.#manager = options.manager;
     this.#logger = options.logger;
     this.#watch = options.watch ?? watchByPolling;
     this.#debounceMs = options.debounceMs ?? 200;
+    this.#roots = options.roots ?? [];
+    this.#listFolders = options.listFolders ?? listFoldersOf;
+    this.#exists = options.exists ?? fileExists;
+    this.#scanIntervalMs = options.scanIntervalMs ?? 1000;
   }
 
   start(): void {
@@ -83,14 +124,28 @@ export class DevReloader {
       }),
     ];
     for (const info of this.#manager.list()) this.#follow(info.id, info.dir);
+    if (this.#roots.length > 0) {
+      this.#scanTimer = setInterval(() => {
+        void this.#scanRoots();
+      }, this.#scanIntervalMs);
+      void this.#scanRoots();
+    }
   }
 
   stop(): void {
+    clearInterval(this.#scanTimer);
+    this.#scanTimer = undefined;
+    clearTimeout(this.#rescanTimer);
+    for (const stopWatching of this.#candidates.values()) stopWatching();
+    this.#candidates.clear();
     for (const dispose of this.#disposers.splice(0)) dispose();
     for (const pluginId of [...this.#watched.keys()]) this.#unfollow(pluginId);
   }
 
   #follow(pluginId: string, dir: string): void {
+    // First: the candidate watches the same file, and stopping it must not stop the new watch.
+    this.#candidates.get(dir)?.();
+    this.#candidates.delete(dir);
     const current = this.#watched.get(pluginId);
     if (current?.dir === dir) return;
     current?.stop();
@@ -98,6 +153,46 @@ export class DevReloader {
       this.#schedule(pluginId);
     });
     this.#watched.set(pluginId, { dir, stop });
+  }
+
+  async #scanRoots(): Promise<void> {
+    const known = new Set(this.#manager.list().map((info) => info.dir));
+    const listed = new Set<string>();
+    for (const root of this.#roots) {
+      for (const name of await this.#listFolders(root)) {
+        if (this.#scanTimer === undefined) return;
+        const dir = join(root, name);
+        listed.add(dir);
+        if (known.has(dir) || this.#candidates.has(dir)) continue;
+        const marker = join(dir, BUILD_MARKER);
+        this.#candidates.set(
+          dir,
+          this.#watch(marker, () => {
+            this.#scheduleRescan();
+          }),
+        );
+        if (await this.#exists(marker)) this.#scheduleRescan();
+      }
+    }
+    for (const [dir, stopWatching] of this.#candidates) {
+      if (listed.has(dir)) continue;
+      stopWatching();
+      this.#candidates.delete(dir);
+    }
+  }
+
+  #scheduleRescan(): void {
+    clearTimeout(this.#rescanTimer);
+    this.#rescanTimer = setTimeout(() => {
+      this.#manager.rescan().then(
+        () => {
+          this.#logger.info('Rescanned plugins after a new build');
+        },
+        (error: unknown) => {
+          this.#logger.warn('Rescanning plugins failed', { error: errorMessage(error) });
+        },
+      );
+    }, this.#debounceMs);
   }
 
   #unfollow(pluginId: string): void {

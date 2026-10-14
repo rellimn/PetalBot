@@ -35,6 +35,8 @@ function fakeManager(plugins: ReloadablePlugin[]) {
   const reloaded: string[] = [];
   const enabled: string[] = [];
   let failReload = false;
+  let rescans = 0;
+  let failRescan = false;
   const target: ReloadTarget = {
     list: () => plugins,
     reload: (id) => {
@@ -44,6 +46,10 @@ function fakeManager(plugins: ReloadablePlugin[]) {
     enable: (id) => {
       enabled.push(id);
       return Promise.resolve();
+    },
+    rescan: () => {
+      rescans += 1;
+      return failRescan ? Promise.reject(new Error('disk gone')) : Promise.resolve();
     },
     onChange: (listener) => {
       changes.add(listener);
@@ -64,6 +70,12 @@ function fakeManager(plugins: ReloadablePlugin[]) {
     enabled,
     failReloads() {
       failReload = true;
+    },
+    get rescans() {
+      return rescans;
+    },
+    failRescans() {
+      failRescan = true;
     },
     add(plugin: ReloadablePlugin) {
       plugins.push(plugin);
@@ -244,5 +256,113 @@ describe('DevReloader during transitions', () => {
     expect(manager.reloaded).toEqual(['counter', 'counter']);
     finish();
     reloader.stop();
+  });
+
+  function folders(initial: string[]) {
+    let names = initial;
+    const built = new Set<string>();
+    return {
+      listFolders: () => Promise.resolve(names),
+      exists: (file: string) => Promise.resolve(built.has(file)),
+      set(next: string[]) {
+        names = next;
+      },
+      build(dir: string) {
+        built.add(join(dir, BUILD_MARKER));
+      },
+    };
+  }
+
+  it('rescans once a new plugin folder has been built', async () => {
+    const files = fakeWatch();
+    const manager = fakeManager([plugin('counter')]);
+    const roots = folders(['counter']);
+    const reloader = new DevReloader({
+      manager: manager.target,
+      logger: createMemoryLogger(),
+      watch: files.watch,
+      roots: ['/srv/plugins'],
+      listFolders: roots.listFolders,
+      exists: roots.exists,
+    });
+    reloader.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(files.watched.size).toBe(1);
+    roots.set(['counter', 'quotes']);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect([...files.watched.keys()]).toContain(join('/srv/plugins/quotes', BUILD_MARKER));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(manager.rescans).toBe(0);
+    files.touch('/srv/plugins/quotes');
+    await vi.advanceTimersByTimeAsync(250);
+    expect(manager.rescans).toBe(1);
+    reloader.stop();
+  });
+
+  it('rescans at once for a new folder that is already built', async () => {
+    const files = fakeWatch();
+    const manager = fakeManager([]);
+    const roots = folders([]);
+    const reloader = new DevReloader({
+      manager: manager.target,
+      logger: createMemoryLogger(),
+      watch: files.watch,
+      roots: ['/srv/plugins'],
+      listFolders: roots.listFolders,
+      exists: roots.exists,
+    });
+    reloader.start();
+    roots.set(['quotes']);
+    roots.build('/srv/plugins/quotes');
+    await vi.advanceTimersByTimeAsync(1250);
+    expect(manager.rescans).toBe(1);
+    reloader.stop();
+  });
+
+  it('hands a new folder over to the plugin watch once the plugin is known', async () => {
+    const files = fakeWatch();
+    const manager = fakeManager([]);
+    const roots = folders(['quotes']);
+    const reloader = new DevReloader({
+      manager: manager.target,
+      logger: createMemoryLogger(),
+      watch: files.watch,
+      roots: ['/srv/plugins'],
+      listFolders: roots.listFolders,
+      exists: roots.exists,
+    });
+    reloader.start();
+    await vi.advanceTimersByTimeAsync(0);
+    manager.add(plugin('quotes'));
+    files.touch('/srv/plugins/quotes');
+    await vi.advanceTimersByTimeAsync(250);
+    expect(manager.reloaded).toEqual(['quotes']);
+    expect(manager.rescans).toBe(0);
+    reloader.stop();
+  });
+
+  it('logs a failed rescan and stops listing folders on stop', async () => {
+    const files = fakeWatch();
+    const manager = fakeManager([]);
+    manager.failRescans();
+    const roots = folders(['quotes']);
+    roots.build('/srv/plugins/quotes');
+    const entries: LogEntry[] = [];
+    const reloader = new DevReloader({
+      manager: manager.target,
+      logger: createMemoryLogger(entries),
+      watch: files.watch,
+      roots: ['/srv/plugins'],
+      listFolders: roots.listFolders,
+      exists: roots.exists,
+    });
+    reloader.start();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(entries.map((entry) => entry.message)).toContain('Rescanning plugins failed');
+    reloader.stop();
+    expect(files.watched.size).toBe(0);
+    roots.set(['quotes', 'later']);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(files.watched.size).toBe(0);
   });
 });

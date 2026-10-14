@@ -6,3 +6,4 @@ docs/superpowers
 .superpowers
 docs/api/*.json
 plugins/*/drizzle
+packages/create-plugin/.out

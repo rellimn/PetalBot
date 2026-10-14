@@ -6,6 +6,7 @@
  * drizzle/, and the core applies it the next time the plugin starts. Never edit applied
  * migrations; add a new one.
  *
+ * Guide: docs/plugin-guide.md#4-the-server.
  * Read next: src/server.ts.
  */
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
