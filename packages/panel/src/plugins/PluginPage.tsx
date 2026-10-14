@@ -16,7 +16,7 @@ export function PluginPage() {
   const user = useUser();
 
   if (!info) {
-    return <EmptyState title="Unknown plugin">There is no plugin called “{pluginId}”.</EmptyState>;
+    return <EmptyState title="Unknown plugin">There is no plugin called "{pluginId}".</EmptyState>;
   }
   if (info.state !== 'running') return <NotRunning info={info} />;
   if (!info.panel) {
@@ -36,7 +36,7 @@ export function PluginPage() {
   if (!page) {
     return (
       <EmptyState title="Page not found">
-        {pluginId} has no page “{path}”.
+        {pluginId} has no page "{path}".
       </EmptyState>
     );
   }

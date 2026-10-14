@@ -32,7 +32,7 @@ beforeEach(() => {
   Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
 });
 
-describe('Admin › Overlays', () => {
+describe('Admin > Overlays', () => {
   it('lists instances grouped by overlay and marks stopped plugins', async () => {
     await renderApp({
       path: '/admin/overlays',
@@ -48,11 +48,11 @@ describe('Admin › Overlays', () => {
         }),
       },
     });
-    const box = await screen.findByRole('region', { name: 'alerts › box' });
+    const box = await screen.findByRole('region', { name: 'alerts > box' });
     expect(within(box).getByRole('link', { name: /Gaming/ })).toBeTruthy();
     expect(within(box).getByRole('link', { name: /Chatting/ })).toBeTruthy();
     expect(within(box).getAllByRole('img', { name: 'alerts is running' })).toHaveLength(2);
-    const ticker = screen.getByRole('region', { name: 'quotes › ticker' });
+    const ticker = screen.getByRole('region', { name: 'quotes > ticker' });
     expect(within(ticker).getByRole('img', { name: 'quotes is not running' })).toBeTruthy();
     expect(screen.getByText('Select an instance')).toBeTruthy();
   });

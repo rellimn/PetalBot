@@ -101,7 +101,7 @@ function Keyed({ name }: { readonly name: string }) {
   renders.push(name);
   return (
     <p>
-      {name}: {value.data?.value ?? '…'}
+      {name}: {value.data?.value ?? '...'}
     </p>
   );
 }

@@ -93,7 +93,7 @@ export function removeColumn(columns: Columns, column: number): Columns {
   return normalizeWidths(merged.filter((_, index) => index !== column));
 }
 
-/** Moves the border after column `border` by `delta` percent, keeping both sides ≥ MIN_WIDTH. */
+/** Moves the border after column `border` by `delta` percent, keeping both sides >= MIN_WIDTH. */
 export function resizeColumns(columns: Columns, border: number, delta: number): PresetColumn[] {
   const left = columns[border];
   const right = columns[border + 1];

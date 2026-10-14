@@ -165,7 +165,7 @@ export function checkPanelDefinition(value: unknown, pluginId: string): PanelDef
     typeof value === 'object' && value !== null ? value : {}
   ) as Partial<PanelDefinition>;
   if (panel.kind !== 'petalbot.panel') {
-    throw new Error('The panel bundle must default-export definePanel(…)');
+    throw new Error('The panel bundle must default-export definePanel(...)');
   }
   if (panel.pluginId !== pluginId) {
     throw new Error(`The panel bundle belongs to "${String(panel.pluginId)}", not "${pluginId}"`);

@@ -454,7 +454,7 @@ describe('Kernel lifecycle safety', () => {
     expect(kernel.isRunning('notes')).toBe(false);
   });
 
-  it('deletes a stopped plugin’s data and refuses while it runs', async () => {
+  it("deletes a stopped plugin's data and refuses while it runs", async () => {
     const { storage, kernel } = setup();
     const notesWithSettings = defineContract({
       ...notesContract,

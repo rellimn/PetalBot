@@ -13,7 +13,7 @@ export const NO_ERRORS: FormErrors = { config: new Map() };
 
 /**
  * Validation issues of POST/PATCH /api/overlays mapped onto the name and config fields (paths are
- * body-relative: ['name'] or ['config', …]). Undefined for every other error.
+ * body-relative: ['name'] or ['config', ...]). Undefined for every other error.
  */
 export function formErrors(error: unknown, fields: readonly FieldSpec[]): FormErrors | undefined {
   if (!(error instanceof ApiError) || error.code !== 'validation') return undefined;

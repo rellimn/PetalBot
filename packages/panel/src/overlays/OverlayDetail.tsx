@@ -179,7 +179,7 @@ export function OverlayDetail({ instance, declared, onUrl }: OverlayDetailProps)
       }
     >
       <p className={styles.meta}>
-        {instance.pluginId} › {instance.overlay}
+        {instance.pluginId} {'>'} {instance.overlay}
       </p>
       <form
         className={styles.form}

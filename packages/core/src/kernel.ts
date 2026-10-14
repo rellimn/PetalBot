@@ -235,7 +235,7 @@ export class Kernel {
       const handler = impls[member];
       if (typeof handler !== 'function') {
         throw new Error(
-          `Plugin "${pluginId}" does not implement RPC "${member}" (setup must return { rpc: { ${member}: … } })`,
+          `Plugin "${pluginId}" does not implement RPC "${member}" (setup must return { rpc: { ${member}: ... } })`,
         );
       }
       scope.add(this.#rpc.register(`${pluginId}.${member}`, handler as RawRpcHandler));

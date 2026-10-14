@@ -52,7 +52,7 @@ export function WidgetFrame({ instance, onConfigure }: WidgetFrameProps) {
     widget?.title ?? `${instance.plugin} / ${instance.widget}`,
   );
 
-  if (info?.state !== 'running') return <Placeholder text={`${title} — plugin not running`} />;
+  if (info?.state !== 'running') return <Placeholder text={`${title} - plugin not running`} />;
   if (!state || state.status === 'loading') {
     return (
       <Card title={title}>
@@ -60,11 +60,11 @@ export function WidgetFrame({ instance, onConfigure }: WidgetFrameProps) {
       </Card>
     );
   }
-  if (state.status === 'error') return <Placeholder text={`${title} — could not be loaded`} />;
+  if (state.status === 'error') return <Placeholder text={`${title} - could not be loaded`} />;
   const current = state.panel.widgets.find((candidate) => candidate.id === instance.widget);
-  if (!current) return <Placeholder text={`${title} — this widget no longer exists`} />;
+  if (!current) return <Placeholder text={`${title} - this widget no longer exists`} />;
   if (!hasRole(user.role, current.minRole ?? 'owner')) {
-    return <Placeholder text={`${title} — not available to you`} />;
+    return <Placeholder text={`${title} - not available to you`} />;
   }
   // The component only ever gets a config that parses (with defaults applied).
   const parsed = current.config?.safeParse(instance.config ?? {});

@@ -379,7 +379,7 @@ describe('Kernel RPC registration', () => {
     const kernel = new Kernel({ logger: createMemoryLogger() });
     const missing = { contract: pingContract, setup: () => ({ rpc: { ping: () => 'pong' } }) };
     await expect(kernel.start(missing)).rejects.toThrow(
-      'Plugin "ping" does not implement RPC "echo" (setup must return { rpc: { echo: … } })',
+      'Plugin "ping" does not implement RPC "echo" (setup must return { rpc: { echo: ... } })',
     );
     expect(kernel.isRunning('ping')).toBe(false);
     const extra = {

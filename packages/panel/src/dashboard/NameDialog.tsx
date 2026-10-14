@@ -9,7 +9,7 @@ export interface NameDialogProps {
   readonly onCancel: () => void;
 }
 
-/** Asks for a preset name (1–40 characters). Mount it only while it is open. */
+/** Asks for a preset name (1-40 characters). Mount it only while it is open. */
 export function NameDialog({ title, initial, confirmLabel, onSubmit, onCancel }: NameDialogProps) {
   const formId = useId();
   const [name, setName] = useState(initial);

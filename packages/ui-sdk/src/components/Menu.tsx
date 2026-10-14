@@ -14,7 +14,7 @@ export interface MenuItem {
 }
 
 export interface MenuProps {
-  /** Accessible name of the default "⋯" trigger. */
+  /** Accessible name of the default "..." trigger. */
   readonly label: string;
   readonly items: readonly MenuItem[];
   /** A custom trigger element (must accept a ref, like Button). */

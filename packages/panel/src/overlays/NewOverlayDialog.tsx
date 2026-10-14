@@ -101,7 +101,7 @@ export function NewOverlayDialog({
           <Select
             options={overlays.map((overlay) => ({
               value: keyOf(overlay),
-              label: `${overlay.pluginId} › ${overlay.overlay}`,
+              label: `${overlay.pluginId} > ${overlay.overlay}`,
             }))}
             value={choice}
             disabled={busy}

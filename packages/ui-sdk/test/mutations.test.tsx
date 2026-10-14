@@ -51,7 +51,7 @@ function Shop() {
     <Toaster>
       <div>
         <p>
-          {items.data?.length ?? '…'} / {stock.data ?? '…'} / {status.data ?? '…'}
+          {items.data?.length ?? '...'} / {stock.data ?? '...'} / {status.data ?? '...'}
         </p>
         <button
           type="button"

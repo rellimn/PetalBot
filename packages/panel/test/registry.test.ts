@@ -126,7 +126,7 @@ describe('PanelRegistry', () => {
     await flush();
     expect(registry.states.get('quotes')).toMatchObject({ status: 'ready', panel: panelV2 });
   });
-  it('publishes one change per step and keeps other plugins’ entries', async () => {
+  it("publishes one change per step and keeps other plugins' entries", async () => {
     const registry = setup({
       '/plugins/quotes/h1/panel.js': () => Promise.resolve({ default: panelV1 }),
       '/plugins/chat/h1/panel.js': () => Promise.resolve({ default: chatPanel }),

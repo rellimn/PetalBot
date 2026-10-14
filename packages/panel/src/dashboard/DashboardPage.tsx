@@ -144,19 +144,19 @@ export function DashboardPage() {
             label="Preset actions"
             items={[
               {
-                label: 'New preset…',
+                label: 'New preset...',
                 onSelect: () => {
                   setDialog('new');
                 },
               },
               {
-                label: 'Rename…',
+                label: 'Rename...',
                 onSelect: () => {
                   setDialog('rename');
                 },
               },
               {
-                label: 'Delete preset…',
+                label: 'Delete preset...',
                 tone: 'danger',
                 disabled: all.length === 1,
                 onSelect: () => {

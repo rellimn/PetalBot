@@ -37,7 +37,7 @@ export type FormValues = Readonly<Record<string, unknown>>;
 export const isJson = (value: unknown): value is Json =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-/** A number limit, or undefined (zod adds ±MAX_SAFE_INTEGER to every int). */
+/** A number limit, or undefined (zod adds +/-MAX_SAFE_INTEGER to every int). */
 const limit = (value: unknown): number | undefined =>
   typeof value === 'number' && Math.abs(value) < Number.MAX_SAFE_INTEGER ? value : undefined;
 

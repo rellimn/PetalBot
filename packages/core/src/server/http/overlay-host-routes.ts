@@ -9,7 +9,7 @@ const IMMUTABLE = 'public, max-age=31536000, immutable';
 
 /**
  * The built overlay host (not in openapi.json):
- * - `/overlay/_/…`: its files (the host is built with base `/overlay/_/`)
+ * - `/overlay/_/...`: its files (the host is built with base `/overlay/_/`)
  * - `/overlay/<plugin>/<overlay>/<instance>`: its page; the WebSocket checks the token
  */
 export function registerOverlayHostRoutes(app: OpenAPIHono<AppEnv>, deps: AppDeps): void {

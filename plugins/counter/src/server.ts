@@ -52,7 +52,7 @@ export default definePlugin(counterContract, {
 
         // `who` is a label for the caller: the panel user's name, 'overlay', or a plugin id.
         increment: ({ counter }, { who }) => {
-          // One UPDATE … RETURNING statement reads and writes the value. Nothing can run in
+          // One UPDATE ... RETURNING statement reads and writes the value. Nothing can run in
           // between, unlike "read the value, await something, write value + step", which loses
           // clicks when two arrive at once (see docs/plugin-guide.md#10-watch-out-for).
           // Drizzle types `.get()` as always finding a row, but it's undefined when none matched.

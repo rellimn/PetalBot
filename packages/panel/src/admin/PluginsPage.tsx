@@ -39,9 +39,9 @@ function stateOf(info: PluginInfo): { label: string; tone: Tone } {
     case 'disabled':
       return { label: 'disabled', tone: 'neutral' };
     case 'starting':
-      return { label: 'starting…', tone: 'accent' };
+      return { label: 'starting...', tone: 'accent' };
     case 'stopping':
-      return { label: 'stopping…', tone: 'accent' };
+      return { label: 'stopping...', tone: 'accent' };
   }
 }
 
@@ -189,7 +189,7 @@ function PluginsContent() {
                             },
                           },
                           {
-                            label: 'Delete data…',
+                            label: 'Delete data...',
                             tone: 'danger',
                             disabled: info.enabled,
                             onSelect: () => {

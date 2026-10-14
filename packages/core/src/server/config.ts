@@ -63,7 +63,7 @@ export type ResolvedConfig = Omit<z.output<typeof configSchema>, 'panelDir' | 'o
   readonly devAuth: Role | undefined;
 };
 
-/** Types `petalbot.config.ts`: `export default defineConfig({ … })`. */
+/** Types `petalbot.config.ts`: `export default defineConfig({ ... })`. */
 export function defineConfig(config: PetalBotConfig): PetalBotConfig {
   return config;
 }
@@ -141,6 +141,6 @@ export async function loadConfig(path: string, env: Env = process.env): Promise<
     throw new Error(`Cannot load config ${file}: ${errorMessage(error)}`, { cause: error });
   }
   const raw = (module as { default?: unknown }).default;
-  if (raw === undefined) throw new Error(`${file} must default-export defineConfig({ … })`);
+  if (raw === undefined) throw new Error(`${file} must default-export defineConfig({ ... })`);
   return resolveConfig(raw, env, dirname(file));
 }

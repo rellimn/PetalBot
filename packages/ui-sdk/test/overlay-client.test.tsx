@@ -39,7 +39,7 @@ function Box() {
   });
   return (
     <p>
-      recent: {recent.data?.join(', ') ?? '…'} / last: {last}
+      recent: {recent.data?.join(', ') ?? '...'} / last: {last}
     </p>
   );
 }

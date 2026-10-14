@@ -4,7 +4,7 @@ import type { AppDeps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 import type { AppEnv } from './middleware.ts';
 
-/** `/api/p/<pluginId>/…` -> the plugin's ctx.http routes (auth rules are per route). */
+/** `/api/p/<pluginId>/...` -> the plugin's ctx.http routes (auth rules are per route). */
 export function registerPluginRoutes(app: OpenAPIHono<AppEnv>, deps: AppDeps): void {
   const forward = async (c: Context<AppEnv>): Promise<Response> => {
     const pluginId = c.req.path.split('/')[3] ?? '';

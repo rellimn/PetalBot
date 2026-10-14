@@ -20,6 +20,6 @@ function DelayedBanner() {
     };
   }, []);
   return visible ? (
-    <Banner tone="warning">Reconnecting… Live data may be out of date until then.</Banner>
+    <Banner tone="warning">Reconnecting... Live data may be out of date until then.</Banner>
   ) : null;
 }

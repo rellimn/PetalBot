@@ -135,7 +135,7 @@ describe('WebSocket server', () => {
     let now = Date.now();
     const s = await setup({ now: () => now, heartbeatMs: 20 });
     const panel = await open(s.wsUrl, { cookie: s.test.cookieFor(ownerUser) });
-    // 4 × 6 days: far past the 7-day idle limit, but the heartbeat keeps refreshing the session.
+    // 4 x 6 days: far past the 7-day idle limit, but the heartbeat keeps refreshing the session.
     for (let step = 0; step < 4; step++) {
       now += 6 * DAY;
       await delay(80);

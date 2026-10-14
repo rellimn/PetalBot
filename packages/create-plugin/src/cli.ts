@@ -5,7 +5,7 @@ import { parseCreateArgs } from './args.ts';
 import { writePlugin } from './scaffold.ts';
 import { checkTarget } from './target.ts';
 
-// `pnpm create-plugin <id> [--no-panel] [--db] [--overlay <name>]…`: writes plugins/<id>/,
+// `pnpm create-plugin <id> [--no-panel] [--db] [--overlay <name>]...`: writes plugins/<id>/,
 // installs, generates the first migration (--db) and builds once, so a running `pnpm dev`
 // picks the plugin up and enables it.
 

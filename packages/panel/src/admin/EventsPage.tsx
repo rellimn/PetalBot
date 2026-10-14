@@ -111,7 +111,7 @@ function EventsContent() {
                       <pre>{JSON.stringify(event.payload, null, 2)}</pre>
                     </details>
                   ) : (
-                    <span className={styles.muted}>—</span>
+                    <span className={styles.muted}>-</span>
                   )}
                 </td>
               </tr>

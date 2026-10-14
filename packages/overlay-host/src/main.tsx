@@ -11,7 +11,7 @@ import { OverlayRuntime } from './runtime.ts';
 const address = parseOverlayAddress(location);
 const element = document.getElementById('root');
 if (!address) {
-  console.error('PetalBot: this overlay URL is incomplete; copy it again from Admin › Overlays');
+  console.error('PetalBot: this overlay URL is incomplete; copy it again from Admin > Overlays');
 } else if (element) {
   const connection = new PetalConnection({ url: overlaySocketUrl(location, address) });
   registerConnection(connection);

@@ -3,11 +3,11 @@ import { StatusDot, usePlugins } from '@petalbot/ui-sdk';
 import type { OverlayInstance } from '../app/endpoints.ts';
 import styles from './overlays.module.css';
 
-/** Instances grouped by `plugin › overlay`, in creation order within a group. */
+/** Instances grouped by `plugin > overlay`, in creation order within a group. */
 function groupsOf(instances: readonly OverlayInstance[]): [string, OverlayInstance[]][] {
   const groups = new Map<string, OverlayInstance[]>();
   for (const instance of instances) {
-    const label = `${instance.pluginId} › ${instance.overlay}`;
+    const label = `${instance.pluginId} > ${instance.overlay}`;
     groups.set(label, [...(groups.get(label) ?? []), instance]);
   }
   return [...groups].sort(([a], [b]) => a.localeCompare(b));

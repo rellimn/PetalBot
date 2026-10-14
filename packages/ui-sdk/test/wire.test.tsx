@@ -38,7 +38,7 @@ function Next() {
   });
   return (
     <p>
-      next: {next.data?.at.toISOString() ?? (next.error ? next.error.code : '…')} / moved: {moved}
+      next: {next.data?.at.toISOString() ?? (next.error ? next.error.code : '...')} / moved: {moved}
     </p>
   );
 }
@@ -96,7 +96,7 @@ describe('decoding what the server sends', () => {
     function Moved() {
       const next = moved.schedule.next.useQuery({});
       // toISOString() only exists on a Date: an undecoded string would throw here.
-      return <p>live: {next.data ? next.data.at.toISOString() : '…'}</p>;
+      return <p>live: {next.data ? next.data.at.toISOString() : '...'}</p>;
     }
     const { socket } = renderWithPetal(<Moved />);
     await waitFor(() => {

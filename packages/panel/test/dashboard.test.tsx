@@ -115,7 +115,7 @@ describe('dashboard', () => {
     });
     await screen.findByText('queue widget');
     harness.setPlugin(pluginInfo('queue', { state: 'disabled', enabled: false, panel: undefined }));
-    expect(await screen.findByText('Queue — plugin not running')).toBeTruthy();
+    expect(await screen.findByText('Queue - plugin not running')).toBeTruthy();
     expect(screen.getByText('12:30')).toBeTruthy();
     harness.setPlugin(pluginInfo('queue'));
     expect(await screen.findByText('queue widget')).toBeTruthy();
@@ -179,7 +179,7 @@ describe('dashboard', () => {
     });
     await screen.findByText('queue widget');
     await userEvent.click(screen.getByRole('button', { name: 'Preset actions' }));
-    await userEvent.click(screen.getByRole('menuitem', { name: 'Rename…' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Rename...' }));
     const name = screen.getByLabelText('Name');
     await userEvent.clear(name);
     await userEvent.type(name, 'Live 2{enter}');
@@ -192,7 +192,7 @@ describe('dashboard', () => {
     });
 
     await userEvent.click(screen.getByRole('button', { name: 'Preset actions' }));
-    await userEvent.click(screen.getByRole('menuitem', { name: 'New preset…' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: 'New preset...' }));
     await userEvent.type(screen.getByLabelText('Name'), 'Raid{enter}');
     await waitFor(() => {
       expect(
@@ -205,7 +205,7 @@ describe('dashboard', () => {
 
     await userEvent.selectOptions(screen.getByLabelText('Preset'), 'p1');
     await userEvent.click(screen.getByRole('button', { name: 'Preset actions' }));
-    await userEvent.click(screen.getByRole('menuitem', { name: 'Delete preset…' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Delete preset...' }));
     await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
     await waitFor(() => {
       expect(

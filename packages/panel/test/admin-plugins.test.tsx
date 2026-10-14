@@ -16,7 +16,7 @@ const plugins = [
 
 const row = (name: string) => screen.getByRole('row', { name: new RegExp(`^${name} `) });
 
-describe('Admin › Plugins', () => {
+describe('Admin > Plugins', () => {
   it('lists plugins with state, errors and discovery problems', async () => {
     await renderApp({
       path: '/admin/plugins',
@@ -89,11 +89,11 @@ describe('Admin › Plugins', () => {
     });
     await userEvent.click(await screen.findByRole('button', { name: 'Actions for chat' }));
     expect(
-      screen.getByRole('menuitem', { name: 'Delete data…' }).getAttribute('aria-disabled'),
+      screen.getByRole('menuitem', { name: 'Delete data...' }).getAttribute('aria-disabled'),
     ).toBe('true');
     await userEvent.keyboard('{Escape}');
     await userEvent.click(screen.getByRole('button', { name: 'Actions for timers' }));
-    await userEvent.click(screen.getByRole('menuitem', { name: 'Delete data…' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Delete data...' }));
     await userEvent.type(screen.getByLabelText('Type timers to confirm'), 'timers');
     await userEvent.click(screen.getByRole('button', { name: 'Delete data' }));
     expect(await screen.findByText('Deleted the data of timers')).toBeTruthy();

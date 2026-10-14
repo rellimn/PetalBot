@@ -186,7 +186,7 @@ describe('settings page', () => {
     const select = await screen.findByLabelText<HTMLSelectElement>('Favorite (optional)');
     await waitFor(() => {
       expect([...select.options].map((option) => option.text)).toEqual([
-        '—',
+        '-',
         'Unknown: gone',
         'Deaths',
         'Wins',

@@ -12,7 +12,7 @@ export function HealthDot({ showConnection = false }: { readonly showConnection?
   const offline = showConnection && status !== 'open';
   const count = health.problems.length;
   const label = offline
-    ? 'Reconnecting…'
+    ? 'Reconnecting...'
     : count === 0
       ? 'All plugins are fine'
       : `${String(count)} plugin${count === 1 ? ' needs' : 's need'} attention`;

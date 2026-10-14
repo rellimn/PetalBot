@@ -11,7 +11,7 @@ export interface ScaffoldOptions {
   readonly overlays: readonly string[];
 }
 
-export const USAGE = 'Usage: pnpm create-plugin <id> [--no-panel] [--db] [--overlay <name>]…';
+export const USAGE = 'Usage: pnpm create-plugin <id> [--no-panel] [--db] [--overlay <name>]...';
 
 function parse(argv: readonly string[]) {
   try {
@@ -38,7 +38,7 @@ function checkName(what: string, name: string): void {
   }
 }
 
-/** Reads `<id> [--no-panel] [--db] [--overlay <name>]…`. Throws an Error with a readable message. */
+/** Reads `<id> [--no-panel] [--db] [--overlay <name>]...`. Throws an Error with a readable message. */
 export function parseCreateArgs(argv: readonly string[]): ScaffoldOptions {
   const { values, positionals } = parse(argv);
   const [id, ...extra] = positionals;

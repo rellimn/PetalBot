@@ -128,7 +128,7 @@ describe('dialogs and menus', () => {
         label="Actions for quotes"
         items={[
           { label: 'Reload', onSelect },
-          { label: 'Delete data…', onSelect: () => undefined, tone: 'danger', disabled: true },
+          { label: 'Delete data...', onSelect: () => undefined, tone: 'danger', disabled: true },
         ]}
       />,
     );
@@ -219,14 +219,14 @@ describe('feedback', () => {
     render(
       <>
         <Banner tone="danger">Plugin crashed</Banner>
-        <Banner tone="info">Reconnecting…</Banner>
+        <Banner tone="info">Reconnecting...</Banner>
         <StatusDot tone="danger" label="1 plugin failed" />
         <Spinner />
       </>,
     );
     expect(screen.getByRole('alert').textContent).toContain('Plugin crashed');
     expect(screen.getAllByRole('status').map((element) => element.textContent)).toContain(
-      'Reconnecting…',
+      'Reconnecting...',
     );
     expect(screen.getByRole('img', { name: '1 plugin failed' })).toBeTruthy();
     expect(screen.getByRole('status', { name: 'Loading' })).toBeTruthy();

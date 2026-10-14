@@ -137,7 +137,7 @@ export interface PluginContext<
   readonly kv: KvApi<Kv>;
   readonly secrets: SecretsApi;
   readonly schedule: ScheduleApi;
-  /** HTTP routes under `/api/p/<pluginId>/…` */
+  /** HTTP routes under `/api/p/<pluginId>/...` */
   readonly http: HttpApi;
   /** The plugin's Drizzle database; only usable when the plugin declares `db`. */
   readonly db: [Db] extends [DbSchema] ? PluginDb<Db> : never;

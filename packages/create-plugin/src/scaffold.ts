@@ -5,7 +5,7 @@ import type { ScaffoldOptions } from './args.ts';
 import { namesOf } from './names.ts';
 import * as templates from './templates.ts';
 
-/** A new plugin's files: relative path → content, before formatting. */
+/** A new plugin's files: relative path -> content, before formatting. */
 export function renderPlugin(options: ScaffoldOptions): Map<string, string> {
   const p: templates.TemplateParams = { ...namesOf(options.id), ...options };
   const files = new Map<string, string>([

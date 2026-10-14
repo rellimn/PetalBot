@@ -55,7 +55,7 @@ describe('counter plugin', () => {
   });
 
   it('stays exact under concurrent increments', async () => {
-    // Each increment is one UPDATE … RETURNING statement, so none can overwrite another.
+    // Each increment is one UPDATE ... RETURNING statement, so none can overwrite another.
     const harness = await start();
     const { id } = await harness.call('counter.create', { name: 'Clicks' });
     await Promise.all(

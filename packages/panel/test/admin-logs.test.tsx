@@ -12,7 +12,7 @@ const entry = (id: number, message: string, extra: Record<string, unknown> = {})
   ...extra,
 });
 
-describe('Admin › Logs', () => {
+describe('Admin > Logs', () => {
   it('shows history and live entries, filtered by plugin and level', async () => {
     const harness = await renderApp({
       path: '/admin/logs',
@@ -213,7 +213,7 @@ describe('Admin › Logs', () => {
   });
 });
 
-describe('Admin › Events', () => {
+describe('Admin > Events', () => {
   it('shows history and live inspector events with a name filter', async () => {
     const event = (id: string, name: string) => ({
       id,

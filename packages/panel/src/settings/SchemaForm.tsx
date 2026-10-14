@@ -120,7 +120,7 @@ function FieldControl({ field, value, errors, onChange, disabled }: ControlProps
         </div>
       );
     case 'enum': {
-      const blank = value === undefined ? [{ value: '', label: '—' }] : [];
+      const blank = value === undefined ? [{ value: '', label: '-' }] : [];
       return (
         <Field {...fieldProps}>
           <Select
@@ -237,7 +237,7 @@ function ChoiceControl({
   const list = choices.data ?? [];
   const known = list.some((choice) => choice.value === current);
   const options = [
-    ...(current === '' || !field.required ? [{ value: '', label: '—' }] : []),
+    ...(current === '' || !field.required ? [{ value: '', label: '-' }] : []),
     // A stored value the RPC no longer lists stays visible instead of silently changing.
     ...(current !== '' && !known && choices.data !== undefined
       ? [{ value: current, label: `Unknown: ${current}` }]

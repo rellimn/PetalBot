@@ -16,7 +16,7 @@ const MESSAGES: Readonly<Record<string, { title: string; text: string }>> = {
   failed: { title: 'Logging in failed', text: 'The login provider refused the login.' },
 };
 
-/** `/login-error?reason=…` (shown without a session). */
+/** `/login-error?reason=...` (shown without a session). */
 export function LoginErrorPage({ reason }: { readonly reason: string | null }) {
   const message = MESSAGES[reason ?? 'failed'] ?? MESSAGES.failed;
   return (

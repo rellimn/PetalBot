@@ -127,7 +127,7 @@ if (!preview) {
 process.stdout.write(
   `\nPetalBot ${preview ? 'preview' : 'dev'}: open ${preview ? 'http://127.0.0.1:8080' : 'http://127.0.0.1:5173'}\n` +
     (preview
-      ? 'Rebuilt plugins take effect after Admin › Plugins › Reload.\n\n'
+      ? 'Rebuilt plugins take effect after Admin > Plugins > Reload.\n\n'
       : 'Rebuilt plugins reload automatically; new plugins start enabled.\n' +
-        'New plugin: npx -y pnpm@12.10.1 create-plugin <id>. Overlays: Admin › Overlays.\n\n'),
+        'New plugin: npx -y pnpm@12.10.1 create-plugin <id>. Overlays: Admin > Overlays.\n\n'),
 );

@@ -20,7 +20,7 @@ export function OverlayHost({ connection, runtime, queryClient }: OverlayHostPro
   const parsed = definition.config.safeParse(session.config);
   if (!parsed.success) {
     console.error(
-      `PetalBot: the config of this instance does not fit ${definition.pluginId}/${definition.name}; change it in Admin › Overlays`,
+      `PetalBot: the config of this instance does not fit ${definition.pluginId}/${definition.name}; change it in Admin > Overlays`,
       parsed.error.issues,
     );
     return null;

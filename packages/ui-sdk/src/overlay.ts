@@ -70,7 +70,7 @@ export interface OverlayDefinition {
   readonly component: ComponentType<OverlayProps<Readonly<Record<string, unknown>>>>;
 }
 
-/** Defines an overlay entry (`src/overlays/<name>.tsx`): `export default defineOverlay(…)`. */
+/** Defines an overlay entry (`src/overlays/<name>.tsx`): `export default defineOverlay(...)`. */
 export function defineOverlay<const C extends ContractShape, const N extends OverlayName<C>>(
   contract: C,
   name: N,
@@ -98,7 +98,7 @@ export function checkOverlayDefinition(
     typeof value === 'object' && value !== null ? value : {}
   ) as Partial<OverlayDefinition>;
   if (overlay.kind !== 'petalbot.overlay') {
-    throw new Error('The overlay bundle must default-export defineOverlay(…)');
+    throw new Error('The overlay bundle must default-export defineOverlay(...)');
   }
   if (overlay.pluginId !== pluginId || overlay.name !== name) {
     throw new Error(

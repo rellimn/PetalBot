@@ -36,7 +36,7 @@ describe('checkSubscribe', () => {
     [overlay, 'alerts.internal', 'forbidden'],
     [gone, 'alerts.shown', 'forbidden'],
     [stopped, 'alerts.shown', 'unavailable'],
-  ] as const)('%#: %o subscribing to %s → %s', (identity, name, expected) => {
+  ] as const)('%#: %o subscribing to %s -> %s', (identity, name, expected) => {
     expect(codeOf(checkSubscribe(identity, name, lookup))).toBe(expected);
   });
 });
@@ -52,7 +52,7 @@ describe('checkCall', () => {
     [overlay, 'alerts.recent', 'ok'],
     [overlay, 'alerts.clear', 'forbidden'],
     [stopped, 'alerts.recent', 'unavailable'],
-  ] as const)('%#: %o calling %s → %s', (identity, name, expected) => {
+  ] as const)('%#: %o calling %s -> %s', (identity, name, expected) => {
     expect(codeOf(checkCall(identity, name, lookup))).toBe(expected);
   });
 });

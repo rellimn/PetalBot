@@ -25,7 +25,7 @@ function oidcServer(): Promise<TestServer> {
   });
 }
 
-/** Runs /auth/login → provider → /auth/callback and returns the callback response. */
+/** Runs /auth/login -> provider -> /auth/callback and returns the callback response. */
 async function logIn(
   server: TestServer,
   user: { sub: string; groups: string[]; name?: string },
@@ -53,7 +53,7 @@ describe('OIDC login', () => {
     expect(location.searchParams.get('redirect_uri')).toBe(`${ORIGIN}/auth/callback`);
     expect(location.searchParams.get('code_challenge_method')).toBe('S256');
 
-    // app.request() uses http://localhost/…, like a proxy forwarding to an internal address.
+    // app.request() uses http://localhost/..., like a proxy forwarding to an internal address.
     const callback = await logIn(server, { sub: 'u1', groups: ['petalbot-owners'], name: 'roman' });
     expect(callback.status).toBe(302);
     expect(callback.headers.get('location')).toBe('/plugins');
