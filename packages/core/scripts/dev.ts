@@ -15,7 +15,10 @@ const root = fileURLToPath(new URL('../../../', import.meta.url));
 const pluginsDir = `${root}plugins`;
 const devDir = fileURLToPath(new URL('../dev/', import.meta.url));
 const preview = process.argv.includes('--preview');
-const pnpm = ['-y', 'pnpm@12.10.1'];
+const windows = process.platform === 'win32';
+// Windows needs cmd.exe to launch npx.cmd. All command arguments below are fixed literals.
+const pnpmCommand = windows ? (process.env.ComSpec ?? 'cmd.exe') : 'npx';
+const pnpm = [...(windows ? ['/d', '/s', '/c', 'npx.cmd'] : []), '-y', 'pnpm@12.10.1'];
 
 const keyFile = `${devDir}secret-key`;
 if (!existsSync(keyFile)) {
@@ -24,10 +27,11 @@ if (!existsSync(keyFile)) {
 const secretKey = readFileSync(keyFile, 'utf8').trim();
 
 const built = spawnSync(
-  'npx',
+  pnpmCommand,
   [...pnpm, '-r', ...(preview ? [] : ['--filter', './plugins/*']), 'build'],
-  { cwd: root, stdio: 'inherit' },
+  { cwd: root, stdio: 'inherit', windowsHide: true },
 );
+if (built.error) process.stderr.write(`[build] failed to start: ${built.error.message}\n`);
 if (built.status !== 0) process.exit(built.status ?? 1);
 
 const children = new Set<ChildProcess>();
@@ -35,11 +39,19 @@ let stopping = false;
 let scanTimer: ReturnType<typeof setInterval> | undefined;
 
 /**
- * Children run in their own process group (`detached`), so this also stops what npx and pnpm
- * started below them. Killing only the direct child left Vite running.
+ * Stop the whole process tree: taskkill on Windows, detached process groups on Unix.
+ * Killing only the direct child leaves the processes started by npx and pnpm running.
  */
 function kill(child: ChildProcess): void {
   if (child.pid === undefined || child.exitCode !== null) return;
+  if (windows) {
+    const result = spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    if (result.error || result.status !== 0) child.kill('SIGTERM');
+    return;
+  }
   try {
     process.kill(-child.pid, 'SIGTERM');
   } catch {
@@ -72,7 +84,8 @@ function run(
     cwd: options.cwd ?? root,
     env: { ...process.env, ...options.env },
     stdio: ['ignore', 'pipe', 'pipe'],
-    detached: true,
+    detached: !windows,
+    windowsHide: true,
   });
   for (const stream of [child.stdout, child.stderr]) {
     stream.on('data', (chunk: Buffer) => {
@@ -81,7 +94,12 @@ function run(
       }
     });
   }
-  child.on('exit', (code) => {
+  child.on('error', (error) => {
+    process.stderr.write(`[${name}] failed to start: ${error.message}\n`);
+    if (options.essential !== false) shutdown(1);
+  });
+  // close also fires after a failed spawn, allowing plugin watchers to be retried.
+  child.on('close', (code) => {
     children.delete(child);
     process.stdout.write(`[${name}] exited with ${String(code)}\n`);
     if (options.essential !== false) shutdown(code ?? 0);
@@ -96,11 +114,11 @@ const watching = new Set<string>();
 function watchPlugins(): void {
   if (stopping) return;
   watchBuiltPlugins(pluginsDir, watching, (dir, exited) => {
-    const child = run(`plugin:${basename(dir)}`, 'npx', [...pnpm, 'run', 'dev'], {
+    const child = run(`plugin:${basename(dir)}`, pnpmCommand, [...pnpm, 'run', 'dev'], {
       cwd: dir,
       essential: false,
     });
-    child.on('exit', exited);
+    child.on('close', exited);
   });
 }
 
@@ -121,8 +139,8 @@ run('core', process.execPath, [`${root}packages/core/src/cli.ts`], {
 if (!preview) {
   watchPlugins();
   scanTimer = setInterval(watchPlugins, 1000);
-  run('panel', 'npx', [...pnpm, '--filter', '@petalbot/panel', 'dev']);
-  run('overlay', 'npx', [...pnpm, '--filter', '@petalbot/overlay', 'dev']);
+  run('panel', pnpmCommand, [...pnpm, '--filter', '@petalbot/panel', 'dev']);
+  run('overlay', pnpmCommand, [...pnpm, '--filter', '@petalbot/overlay', 'dev']);
 }
 process.stdout.write(
   `\nPetalBot ${preview ? 'preview' : 'dev'}: open ${preview ? 'http://127.0.0.1:8080' : 'http://127.0.0.1:5173'}\n` +
