@@ -5,6 +5,7 @@ import {
   useQueryClient,
   type UseMutationResult,
   type UseQueryResult,
+  type UseMutationOptions,
 } from '@tanstack/react-query';
 import { useEffect, useEffectEvent } from 'react';
 import type { z } from 'zod';
@@ -133,20 +134,22 @@ export interface QueryHandle<In, Out> {
   call(...args: CallArgs<In>): Promise<Out>;
 }
 
-export interface MutationOptions<Out> {
+export type MutationOptions<Input, Output, Context = unknown> = {
   /** A toast after success (for `Result` outputs: only for `{ ok: true }`). */
-  readonly success?: string | ((data: Out) => ToastInput);
+  readonly success?: string | ((data: Output) => ToastInput);
   /** A toast after failure, with the error's (or failed `Result`'s) message as the description. */
   readonly error?: string | ((problem: { readonly message: string }) => ToastInput);
-}
+} & Pick<UseMutationOptions<Output, ClientError, Input, Context>, "onSuccess" | "onMutate" | "onError" | "onSettled">
+
+// `void` lets RPCs without input be called as `mutate()` (TanStack's convention).
+// eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- see above
+type MutationInput<In> = [In] extends [undefined] ? void : In;
 
 export interface MutationHandle<In, Out> {
   /** The RPC as a TanStack mutation: `mutate(input)`, or `mutate()` for RPCs without input. */
-  useMutation(
-    options?: MutationOptions<Out>,
-    // `void` lets RPCs without input be called as `mutate()` (TanStack's convention).
-    // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- see above
-  ): UseMutationResult<Out, ClientError, [In] extends [undefined] ? void : In>;
+  useMutation<Context = unknown>(
+    options?: MutationOptions<MutationInput<In>, Out, Context>,
+  ): UseMutationResult<Out, ClientError, MutationInput<In>, Context>;
   call(...args: CallArgs<In>): Promise<Out>;
 }
 
@@ -356,7 +359,7 @@ function failedResult(data: unknown): { readonly message: string } | undefined {
 }
 
 function errorToast(
-  option: NonNullable<MutationOptions<unknown>['error']>,
+  option: NonNullable<MutationOptions<unknown, unknown>['error']>,
   problem: { readonly message: string },
 ): ToastInput {
   return typeof option === 'string'
@@ -364,35 +367,44 @@ function errorToast(
     : option(problem);
 }
 
-function mutationHandle(schemas: WireSchemas, name: string, invalidates: readonly string[]) {
-  function useMutation(
-    options: MutationOptions<unknown> = {},
-  ): UseMutationResult<unknown, ClientError> {
+function mutationHandle<Input, Output>(schemas: WireSchemas, name: string, invalidates: readonly string[]) {
+  function useMutation<Context>(
+    options: MutationOptions<Input, Output, Context> = {},
+  ): UseMutationResult<Output, ClientError, Input, Context> {
     const connection = useConnection();
     const queryClient = useQueryClient();
-    return useTanstackMutation<unknown, ClientError, unknown>({
-      mutationFn: (input) => request(schemas, connection, name, input),
-      onSuccess: (data) => {
+    return useTanstackMutation<Output, ClientError, Input, Context>({
+      mutationFn: (input) => request(schemas, connection, name, input) as Promise<Output>,
+      onSuccess: async (data, ...args) => {
         // Every input of each query: rpcQueryKey's prefix without the input.
         for (const query of invalidates) {
           void queryClient.invalidateQueries({ queryKey: ['petalbot', 'rpc', query] });
         }
         const failed = failedResult(data);
+        // Toasts
         if (failed) {
-          if (options.error !== undefined) toast(errorToast(options.error, failed));
-          return;
-        }
-        if (options.success !== undefined) {
+          if (options.error !== undefined) {
+            toast(errorToast(options.error, failed));
+          }
+        } else if (options.success !== undefined) {
           toast(
             typeof options.success === 'string'
               ? { title: options.success, tone: 'success' }
               : options.success(data),
           );
         }
+        await options.onSuccess?.(data, ...args);
       },
-      onError: (error) => {
+      onError: async (error, ...args) => {
         if (options.error !== undefined) toast(errorToast(options.error, error));
+        await options.onError?.(error, ...args);
       },
+      ...(options.onSettled !== undefined && {
+        onSettled: options.onSettled,
+      }),
+      ...(options.onMutate !== undefined && {
+        onMutate: options.onMutate,
+      }),
     });
   }
   return {
