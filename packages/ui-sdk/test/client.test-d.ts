@@ -39,6 +39,7 @@ const counter = defineContract({
       expose: { panel: 'mod' },
     },
     create: { input: z.object({ name: z.string() }), output: Counter, expose: { panel: 'owner' } },
+    clear: { output: z.number(), expose: { panel: 'owner' } },
     hidden: { kind: 'query', output: z.string() },
   },
 });
@@ -217,3 +218,89 @@ describe('createPluginClient', () => {
     });
   });
 });
+
+interface RollbackContext {
+  previous: CounterRow[];
+}
+
+/** Context must be inferred from onMutate and survive both hook and per-call callbacks. */
+export function UsesMutationContext() {
+  const mutation = api.counter.create.useMutation({
+    onMutate: (input) => {
+      expectTypeOf(input).toEqualTypeOf<{ name: string }>();
+      return { previous: [] as CounterRow[] };
+    },
+    onSuccess: (data, input, context) => {
+      expectTypeOf(data).toEqualTypeOf<CounterRow>();
+      expectTypeOf(input).toEqualTypeOf<{ name: string }>();
+      expectTypeOf(context).toEqualTypeOf<RollbackContext>();
+    },
+    onError: (error, input, context) => {
+      expectTypeOf(error).toEqualTypeOf<ClientError>();
+      expectTypeOf(input).toEqualTypeOf<{ name: string }>();
+      expectTypeOf(context).toEqualTypeOf<RollbackContext | undefined>();
+    },
+    onSettled: (data, error, input, context) => {
+      expectTypeOf(data).toEqualTypeOf<CounterRow | undefined>();
+      expectTypeOf(error).toEqualTypeOf<ClientError | null>();
+      expectTypeOf(input).toEqualTypeOf<{ name: string }>();
+      expectTypeOf(context).toEqualTypeOf<RollbackContext | undefined>();
+    },
+  });
+  expectTypeOf(mutation).toEqualTypeOf<
+    UseMutationResult<CounterRow, ClientError, { name: string }, RollbackContext>
+  >();
+  expectTypeOf(mutation.context).toEqualTypeOf<RollbackContext | undefined>();
+  mutation.mutate(
+    { name: 'Deaths' },
+    {
+      onSuccess: (_data, _input, context) => {
+        expectTypeOf(context).toEqualTypeOf<RollbackContext | undefined>();
+      },
+      onError: (_error, _input, context) => {
+        expectTypeOf(context).toEqualTypeOf<RollbackContext | undefined>();
+      },
+      onSettled: (_data, _error, _input, context) => {
+        expectTypeOf(context).toEqualTypeOf<RollbackContext | undefined>();
+      },
+    },
+  );
+  // Explicit context types remain available when the caller wants to declare one.
+  api.counter.create.useMutation<RollbackContext>({ onMutate: () => ({ previous: [] }) });
+  return null;
+}
+
+/** Async onMutate results are unwrapped; inputless RPCs consistently use void. */
+export function UsesInputlessMutationContext() {
+  const mutation = api.counter.clear.useMutation({
+    onMutate: (input) => {
+      expectTypeOf(input).toBeVoid();
+      return Promise.resolve({ previous: [] as CounterRow[] });
+    },
+    onSuccess: (data, input, context) => {
+      expectTypeOf(data).toEqualTypeOf<number>();
+      expectTypeOf(input).toBeVoid();
+      expectTypeOf(context).toEqualTypeOf<RollbackContext>();
+    },
+    onError: (_error, input, context) => {
+      expectTypeOf(input).toBeVoid();
+      expectTypeOf(context).toEqualTypeOf<RollbackContext | undefined>();
+    },
+    onSettled: (_data, _error, input, context) => {
+      expectTypeOf(input).toBeVoid();
+      expectTypeOf(context).toEqualTypeOf<RollbackContext | undefined>();
+    },
+  });
+  expectTypeOf(mutation).toEqualTypeOf<
+    UseMutationResult<number, ClientError, void, RollbackContext>
+  >();
+  mutation.mutate();
+  expectTypeOf(mutation.mutateAsync()).toEqualTypeOf<Promise<number>>();
+  mutation.mutate(undefined, {
+    onSuccess: (_data, input, context) => {
+      expectTypeOf(input).toBeVoid();
+      expectTypeOf(context).toEqualTypeOf<RollbackContext | undefined>();
+    },
+  });
+  return null;
+}
