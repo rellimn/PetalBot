@@ -19,6 +19,7 @@ import {
   type TwitchAccount,
 } from './contract.ts';
 import { authorizeUrl, backToPage, createPendingLogins, hasScopes, redirect } from './oauth.ts';
+import { startRuntime, type Runtime, type RuntimeStatus } from './runtime.ts';
 import type { TwitchClient, TwitchClientFactory } from './twitch-client.ts';
 
 export function createTwitchPlugin(createClient: TwitchClientFactory) {
@@ -44,10 +45,60 @@ export function createTwitchPlugin(createClient: TwitchClientFactory) {
           onRefreshFailure: () => undefined,
         });
 
-      /** Called after an account was connected or removed. */
-      const onAccountsChanged = (): void => {
+      const changed = (): void => {
         ctx.emit('twitch.connectionChanged', {});
       };
+
+      let runtime: Runtime | undefined;
+      let stopped = false;
+
+      /** Starts a runtime for the current credentials and accounts, if they allow one. */
+      const start = async (): Promise<Runtime | undefined> => {
+        const app = await credentials();
+        const accounts = (await ctx.kv.get('accounts')) ?? {};
+        const { broadcaster } = accounts;
+        if (!app || !broadcaster) return undefined;
+        const broadcasterToken = await ctx.secrets.get('tokens', broadcaster.id);
+        if (!broadcasterToken) return undefined;
+        return await startRuntime({
+          ctx,
+          client: newClient(app),
+          broadcaster,
+          tokens: { broadcaster: broadcasterToken },
+          onChange: changed,
+        });
+      };
+
+      /**
+       * Replaces the runtime after the credentials or accounts changed. Serialized, so two quick
+       * changes never leave two listeners running.
+       */
+      const rebuild = (): Promise<void> =>
+        ctx.lock('runtime', async () => {
+          await runtime?.dispose();
+          runtime = undefined;
+          if (stopped) return;
+          try {
+            runtime = await start();
+          } catch (error) {
+            ctx.log.error('Could not start the Twitch connection', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+          changed();
+        });
+
+      /** Called after an account was connected or removed. */
+      const onAccountsChanged = rebuild;
+
+      ctx.onDispose(async () => {
+        stopped = true;
+        await runtime?.dispose();
+        runtime = undefined;
+      });
+      void rebuild().catch((error: unknown) => {
+        ctx.log.debug('Twitch start skipped', { error: String(error) });
+      });
 
       ctx.http.route(
         'GET',
@@ -101,7 +152,7 @@ export function createTwitchPlugin(createClient: TwitchClientFactory) {
           await ctx.kv.update('accounts', (current) => ({ ...current, [kind]: user }));
           if (previous && previous.id !== user.id) await ctx.secrets.delete('tokens', previous.id);
           ctx.log.info('Twitch account connected', { account: kind, login: user.login });
-          onAccountsChanged();
+          await onAccountsChanged();
           return backToPage({ connected: kind });
         },
         { public: true },
@@ -113,14 +164,19 @@ export function createTwitchPlugin(createClient: TwitchClientFactory) {
       return {
         rpc: {
           async status() {
+            // Under the lock: a rebuild in progress finishes first.
+            const live: RuntimeStatus | undefined = await ctx.lock(
+              'runtime',
+              () => runtime?.status,
+            );
             const accounts = (await ctx.kv.get('accounts')) ?? {};
             return {
               configured: (await credentials()) !== null,
               redirectUrl: redirectUri,
               broadcaster: statusOf(accounts.broadcaster),
               bot: statusOf(accounts.bot),
-              botRole: null,
-              eventSub: { broadcaster: 'off', bot: 'off' },
+              botRole: live?.botRole ?? null,
+              eventSub: live ? { ...live.eventSub } : { broadcaster: 'off', bot: 'off' },
             };
           },
           disconnect() {
