@@ -22,8 +22,10 @@ import {
   type TwitchAccount,
 } from './contract.ts';
 import { authorizeUrl, backToPage, createPendingLogins, hasScopes, redirect } from './oauth.ts';
-import { startRuntime, type Runtime, type RuntimeStatus } from './runtime.ts';
-import type { TwitchClient, TwitchClientFactory } from './twitch-client.ts';
+import { errorText } from './redact.ts';
+import { startRuntime, type Runtime } from './runtime.ts';
+import { REFRESH_RETRY_MS, STATUS_WAIT_MS } from './scopes.ts';
+import type { RefreshFailure, TwitchClient, TwitchClientFactory } from './twitch-client.ts';
 
 export function createTwitchPlugin(createClient: TwitchClientFactory) {
   return definePlugin(twitchContract, {
@@ -41,8 +43,6 @@ export function createTwitchPlugin(createClient: TwitchClientFactory) {
 
       /** User ids whose token Twitch refused to refresh. */
       const reconnectRequired = new Set<string>();
-      const errorText = (error: unknown): string =>
-        error instanceof Error ? error.message : String(error);
 
       /** A client for the current credentials; tokens it refreshes are stored. */
       const newClient = (app: { clientId: string; clientSecret: string }): TwitchClient =>
@@ -56,18 +56,31 @@ export function createTwitchPlugin(createClient: TwitchClientFactory) {
               });
             });
           },
-          onRefreshFailure: (userId) => {
-            void refreshFailed(userId);
+          onRefreshFailure: (userId, kind) => {
+            refreshFailed(userId, kind).catch(() => undefined);
           },
         });
 
-      const refreshFailed = async (userId: string): Promise<void> => {
+      /** A pending retry after a transient refresh failure (one at a time). */
+      let retry: (() => void) | undefined;
+
+      const refreshFailed = async (userId: string, failure: RefreshFailure): Promise<void> => {
         const accounts = (await ctx.kv.get('accounts')) ?? {};
         const kind = AccountKind.options.find((name) => accounts[name]?.id === userId);
         if (kind === undefined || reconnectRequired.has(userId)) return;
+        if (failure === 'transient') {
+          // Twurple won't refresh this user again on the same client: a fresh one retries.
+          if (retry) return;
+          ctx.log.warn('Twitch token refresh failed; retrying in a minute', { account: kind });
+          retry = ctx.schedule.after(REFRESH_RETRY_MS, () => {
+            retry = undefined;
+            startRebuild();
+          });
+          return;
+        }
         reconnectRequired.add(userId);
         ctx.log.warn('Twitch token refresh failed; reconnect the account', { account: kind });
-        await rebuild().catch(() => undefined);
+        startRebuild();
       };
 
       const changed = (): void => {
@@ -75,6 +88,8 @@ export function createTwitchPlugin(createClient: TwitchClientFactory) {
       };
 
       let runtime: Runtime | undefined;
+      /** The latest rebuild; `twitch.status` waits for it briefly. */
+      let rebuilding: Promise<void> = Promise.resolve();
       let stopped = false;
       /** Read through a function: `stopped` changes while a rebuild awaits. */
       const isStopped = (): boolean => stopped;
@@ -104,8 +119,8 @@ export function createTwitchPlugin(createClient: TwitchClientFactory) {
        * Replaces the runtime after the credentials or accounts changed. Serialized, so two quick
        * changes never leave two listeners running.
        */
-      const rebuild = (): Promise<void> =>
-        ctx.lock('runtime', async () => {
+      const rebuild = (): Promise<void> => {
+        const next = ctx.lock('runtime', async () => {
           await runtime?.dispose();
           runtime = undefined;
           if (isStopped()) return;
@@ -124,23 +139,31 @@ export function createTwitchPlugin(createClient: TwitchClientFactory) {
           }
           changed();
         });
+        rebuilding = next.catch(() => undefined);
+        return next;
+      };
+
+      /** A rebuild nobody waits for: listeners return at once (the core times them out). */
+      const startRebuild = (): void => {
+        rebuild().catch((error: unknown) => {
+          ctx.log.debug('Twitch rebuild skipped', { error: errorText(error) });
+        });
+      };
 
       /** Called after an account was connected or removed. */
       const onAccountsChanged = rebuild;
 
-      ctx.settings.onChange(async (next, previous) => {
-        if (next.clientId !== previous.clientId) await rebuild();
+      ctx.settings.onChange((next, previous) => {
+        if (next.clientId !== previous.clientId) startRebuild();
       });
-      ctx.secrets.onChange('clientSecret', rebuild);
+      ctx.secrets.onChange('clientSecret', startRebuild);
 
       ctx.onDispose(async () => {
         stopped = true;
         await runtime?.dispose();
         runtime = undefined;
       });
-      void rebuild().catch((error: unknown) => {
-        ctx.log.debug('Twitch start skipped', { error: String(error) });
-      });
+      startRebuild();
 
       ctx.http.route(
         'GET',
@@ -179,7 +202,7 @@ export function createTwitchPlugin(createClient: TwitchClientFactory) {
           } catch (error) {
             ctx.log.warn('Twitch login failed', {
               account: kind,
-              error: error instanceof Error ? error.message : String(error),
+              error: errorText(error),
             });
             return backToPage({ error: 'exchange-failed' });
           }
@@ -215,11 +238,17 @@ export function createTwitchPlugin(createClient: TwitchClientFactory) {
       return {
         rpc: {
           async status() {
-            // Under the lock: a rebuild in progress finishes first.
-            const live: RuntimeStatus | undefined = await ctx.lock(
-              'runtime',
-              () => runtime?.status,
-            );
+            // A rebuild in progress usually finishes within moments; a slow Twitch doesn't hold
+            // the page up (connectionChanged refreshes it once the rebuild is done).
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            await Promise.race([
+              rebuilding,
+              new Promise((resolve) => {
+                timer = setTimeout(resolve, STATUS_WAIT_MS);
+              }),
+            ]);
+            clearTimeout(timer);
+            const live = runtime?.status;
             const accounts = (await ctx.kv.get('accounts')) ?? {};
             return {
               configured: (await credentials()) !== null,

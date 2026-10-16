@@ -8,11 +8,12 @@
  *
  * Not covered by `pnpm check`: the manual Twitch checklist in the M5c plan tests this file.
  */
-import { ApiClient } from '@twurple/api';
+import { ApiClient, ChatMessageDroppedError } from '@twurple/api';
 import { RefreshingAuthProvider, exchangeCode, getTokenInfo, revokeToken } from '@twurple/auth';
 import { EventSubWsListener } from '@twurple/eventsub-ws';
 import type { Logger } from '@petalbot/sdk';
 import type { AccountKind, BotRole, SocketState, TwitchAccount, TwitchToken } from './contract.ts';
+import { errorText, redact } from './redact.ts';
 
 /** A Helix request Twitch answered with an error status. */
 export class TwitchRequestError extends Error {
@@ -32,8 +33,11 @@ export interface TwitchClientOptions {
   /** Receives Twurple's warnings and errors. */
   readonly log: Logger;
   onTokenRefresh(userId: string, token: TwitchToken): void;
-  onRefreshFailure(userId: string, error: Error): void;
+  /** `invalid`: Twitch refused the refresh token (reconnect needed); `transient`: try later. */
+  onRefreshFailure(userId: string, kind: RefreshFailure): void;
 }
+
+export type RefreshFailure = 'invalid' | 'transient';
 
 export type TwitchClientFactory = (options: TwitchClientOptions) => TwitchClient;
 
@@ -119,13 +123,26 @@ function statusOf(error: unknown): { status: number; body: string } | undefined 
     : undefined;
 }
 
+/** Twitch answers a refused refresh token with 400 (or 401); anything else may pass. */
+export function refreshFailureKind(error: unknown): RefreshFailure {
+  const failed = statusOf(error);
+  return failed && (failed.status === 400 || failed.status === 401) ? 'invalid' : 'transient';
+}
+
+/** Twurple throws `ChatMessageDroppedError` when Twitch answers `is_sent: false`. */
+export function droppedOutcome(error: unknown): SendOutcome | undefined {
+  if (!(error instanceof ChatMessageDroppedError)) return undefined;
+  const reason = /dropped: (.*)$/s.exec(error.message)?.[1] ?? error.message;
+  return { sent: false, code: error.code ?? 'unknown', message: reason };
+}
+
 /** Runs a Helix request; error statuses become `TwitchRequestError`. */
 async function helix<T>(request: () => Promise<T>): Promise<T> {
   try {
     return await request();
   } catch (error) {
     const failed = statusOf(error);
-    if (failed) throw new TwitchRequestError(failed.status, failed.body, { cause: error });
+    if (failed) throw new TwitchRequestError(failed.status, redact(failed.body), { cause: error });
     throw error;
   }
 }
@@ -156,8 +173,8 @@ export const createTwurpleClient: TwitchClientFactory = (options) => {
   const logger = {
     minLevel: 'warning',
     custom: (level: number, message: string) => {
-      if (level <= 1) log.error(`Twurple: ${message}`);
-      else log.warn(`Twurple: ${message}`);
+      if (level <= 1) log.error(`Twurple: ${redact(message)}`);
+      else log.warn(`Twurple: ${redact(message)}`);
     },
   };
   const auth = new RefreshingAuthProvider({ clientId, clientSecret });
@@ -165,7 +182,7 @@ export const createTwurpleClient: TwitchClientFactory = (options) => {
     options.onTokenRefresh(userId, tokenOf(token));
   });
   auth.onRefreshFailure((userId, error) => {
-    options.onRefreshFailure(userId, error);
+    options.onRefreshFailure(userId, refreshFailureKind(error));
   });
   const api = new ApiClient({ authProvider: auth, logger });
 
@@ -200,21 +217,21 @@ export const createTwurpleClient: TwitchClientFactory = (options) => {
         : 'none';
     },
     async sendMessage({ broadcasterId, botId, text, replyTo }) {
-      const sent = await helix(() =>
-        api.chat.sendChatMessageAsApp(
-          botId,
-          broadcasterId,
-          text,
-          replyTo === undefined ? {} : { replyParentMessageId: replyTo },
-        ),
-      );
-      return sent.isSent
-        ? { sent: true, messageId: sent.id }
-        : {
-            sent: false,
-            code: sent.dropReasonCode ?? 'unknown',
-            message: sent.dropReasonMessage ?? '',
-          };
+      try {
+        const sent = await helix(() =>
+          api.chat.sendChatMessageAsApp(
+            botId,
+            broadcasterId,
+            text,
+            replyTo === undefined ? {} : { replyParentMessageId: replyTo },
+          ),
+        );
+        return { sent: true, messageId: sent.id };
+      } catch (error) {
+        const dropped = droppedOutcome(error);
+        if (dropped) return dropped;
+        throw error;
+      }
     },
     async deleteMessage({ broadcasterId, botId, messageId }) {
       await helix(() =>
@@ -246,14 +263,14 @@ export const createTwurpleClient: TwitchClientFactory = (options) => {
         if (error)
           log.warn('Twitch EventSub disconnected', {
             account: kindOf(userId),
-            error: error.message,
+            error: errorText(error),
           });
         handlers.socket({ kind: kindOf(userId), state: 'disconnected' });
       });
       listener.onSubscriptionCreateFailure((subscription, error) => {
         log.warn('Twitch EventSub subscription failed', {
           subscription: subscription.id,
-          error: error.message,
+          error: errorText(error),
         });
       });
 

@@ -42,3 +42,8 @@ export const RATE_LIMIT_PAUSE_MS = 30_000;
 export function chatLimits(role: BotRole): { limit: number; minIntervalMs: number } {
   return role === 'none' ? { limit: 20, minIntervalMs: 1000 } : { limit: 100, minIntervalMs: 0 };
 }
+
+/** After a refresh failed for a reason other than a refused token (network, Twitch down). */
+export const REFRESH_RETRY_MS = 60_000;
+/** How long `twitch.status` waits for a rebuild in progress before answering anyway. */
+export const STATUS_WAIT_MS = 2000;

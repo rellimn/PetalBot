@@ -23,6 +23,7 @@ import type {
 } from './contract.ts';
 import { createChatMethods } from './chat-provider.ts';
 import * as map from './mapping.ts';
+import { errorText } from './redact.ts';
 import { CHAT_MAX_QUEUE, CHAT_MAX_WAIT_MS, CHAT_WINDOW_MS, chatLimits } from './scopes.ts';
 import type { TwitchClient, TwitchEventHandlers } from './twitch-client.ts';
 
@@ -53,9 +54,6 @@ export interface RuntimeInput {
   /** Called after anything in `status` changed. */
   readonly onChange: () => void;
 }
-
-const errorText = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 export async function startRuntime(input: RuntimeInput): Promise<Runtime> {
   const { ctx, client, broadcaster, onChange } = input;

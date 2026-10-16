@@ -1,7 +1,7 @@
 /**
  * Starts the twitch plugin in a harness with a fake Twitch client, and drives its HTTP routes.
  */
-import type { PanelUser } from '@petalbot/sdk';
+import type { Logger, PanelUser } from '@petalbot/sdk';
 import { createTestHarness } from '@petalbot/testing';
 import type { AccountKind, TwitchAccount } from '../src/contract.ts';
 import { createTwitchPlugin } from '../src/plugin.ts';
@@ -16,18 +16,36 @@ export interface StartOptions {
   /** Accounts connected through the OAuth flow before the test starts. */
   readonly accounts?: readonly AccountKind[];
   readonly defaults?: FakeDefaults;
+  readonly logger?: Logger;
+}
+
+/** A logger that keeps every line, for checking what reaches the log. */
+export function recordingLogger(): Logger & { readonly lines: string[] } {
+  const lines: string[] = [];
+  const write = (level: string) => (message: string, data?: unknown) => {
+    lines.push(`${level} ${message} ${JSON.stringify(data ?? {})}`);
+  };
+  const logger: Logger & { readonly lines: string[] } = {
+    lines,
+    debug: write('debug'),
+    info: write('info'),
+    warn: write('warn'),
+    error: write('error'),
+    child: () => logger,
+  };
+  return logger;
 }
 
 export async function startTwitch(options: StartOptions = {}) {
   const defaults: FakeDefaults = { ...options.defaults };
   const fake = createFakeClient(defaults);
   const plugin = createTwitchPlugin(fake.factory);
-  const harness = await createTestHarness(
-    plugin,
-    options.credentials === false
+  const harness = await createTestHarness(plugin, {
+    ...(options.logger ? { logger: options.logger } : {}),
+    ...(options.credentials === false
       ? {}
-      : { settings: { clientId: 'client' }, secrets: { clientSecret: 'secret' } },
-  );
+      : { settings: { clientId: 'client' }, secrets: { clientSecret: 'secret' } }),
+  });
   const secrets = harness.kernel.secrets(plugin);
 
   const get = async (path: string, user: PanelUser | null = owner): Promise<Response> =>

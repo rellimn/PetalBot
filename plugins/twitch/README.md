@@ -77,9 +77,13 @@ Only what the domains can't express:
 ## Tokens
 
 Tokens are stored encrypted per Twitch user id and refreshed automatically. When Twitch refuses a
-refresh (the app was disconnected at twitch.tv/settings/connections), the account shows
+refresh token (the app was disconnected at twitch.tv/settings/connections), the account shows
 **Reconnect required**: a bot account drops chat, a broadcaster account stops everything until
-it is reconnected. A restart tries the stored token again.
+it is reconnected. A restart tries the stored token again. Other refresh failures (network,
+Twitch down) keep the account and retry after a minute.
+
+Nothing the plugin logs about Twitch contains the client secret, tokens or OAuth codes: Twurple's
+error messages quote request URLs, so they are redacted first.
 
 ## Limitations
 

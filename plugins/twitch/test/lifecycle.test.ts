@@ -1,8 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { bot, broadcaster, tokenFor } from './fake-client.ts';
 import { startTwitch } from './helpers.ts';
 
 const KEY = 'twitch:roman';
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const changes = (events: readonly { name: string }[]): number =>
   events.filter((event) => event.name === 'twitch.connectionChanged').length;
@@ -22,7 +26,7 @@ describe('tokens', () => {
     const { fake, harness } = await startTwitch({ accounts: ['broadcaster', 'bot'] });
     await harness.call('twitch.status');
     const before = changes(harness.events);
-    fake.last().options.onRefreshFailure(bot.id, new Error('invalid refresh token'));
+    fake.last().options.onRefreshFailure(bot.id, 'invalid');
     expect(await harness.call('twitch.status')).toMatchObject({
       broadcaster: { state: 'connected' },
       bot: { ...bot, state: 'reconnect-required' },
@@ -39,7 +43,7 @@ describe('tokens', () => {
     const { connect, fake, harness } = await startTwitch({ accounts: ['broadcaster', 'bot'] });
     await harness.call('twitch.status');
     const old = fake.last();
-    old.options.onRefreshFailure(broadcaster.id, new Error('revoked'));
+    old.options.onRefreshFailure(broadcaster.id, 'invalid');
     expect(await harness.call('twitch.status')).toMatchObject({
       broadcaster: { state: 'reconnect-required' },
       eventSub: { broadcaster: 'off', bot: 'off' },
@@ -56,11 +60,31 @@ describe('tokens', () => {
     await harness.stop();
   });
 
+  it('a transient refresh failure keeps the account and retries after a minute', async () => {
+    const { fake, harness } = await startTwitch({ accounts: ['broadcaster', 'bot'] });
+    await harness.call('twitch.status');
+    const clients = fake.created.length;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    fake.last().options.onRefreshFailure(bot.id, 'transient');
+    fake.last().options.onRefreshFailure(bot.id, 'transient');
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(fake.created).toHaveLength(clients);
+    await vi.advanceTimersByTimeAsync(1000);
+    vi.useRealTimers();
+    expect(await harness.call('twitch.status')).toMatchObject({
+      bot: { state: 'connected' },
+    });
+    // One retry for both failures: a fresh client, which refreshes again.
+    expect(fake.created).toHaveLength(clients + 1);
+    expect(fake.last().listenUsers).toEqual({ broadcasterId: '1', botId: '2' });
+    await harness.stop();
+  });
+
   it('ignores refresh failures of unknown users', async () => {
     const { fake, harness } = await startTwitch({ accounts: ['broadcaster'] });
     await harness.call('twitch.status');
     const clients = fake.created.length;
-    fake.last().options.onRefreshFailure('99', new Error('x'));
+    fake.last().options.onRefreshFailure('99', 'invalid');
     expect(await harness.call('twitch.status')).toMatchObject({
       broadcaster: { state: 'connected' },
     });
@@ -156,6 +180,37 @@ describe('credential changes', () => {
       eventSub: { broadcaster: 'off' },
     });
     expect(fake.created.filter((client) => client.listening)).toEqual([]);
+    await harness.stop();
+  });
+
+  it('a slow rebuild holds up neither the secret save nor the status', async () => {
+    const { defaults, harness } = await startTwitch({ accounts: ['broadcaster'] });
+    await harness.call('twitch.status');
+    let release: (value: null) => void = () => undefined;
+    defaults.stream = () =>
+      new Promise((resolve) => {
+        release = resolve;
+      });
+    const timeout = (ms: number) =>
+      new Promise((resolve) =>
+        setTimeout(() => {
+          resolve('timeout');
+        }, ms),
+      );
+    const saved = harness.setSecret('clientSecret', 'new-secret').then(() => 'saved');
+    expect(await Promise.race([saved, timeout(500)])).toBe('saved');
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const status = harness.call('twitch.status');
+    await vi.advanceTimersByTimeAsync(2000);
+    vi.useRealTimers();
+    expect(await status).toMatchObject({
+      broadcaster: { state: 'connected' },
+      eventSub: { broadcaster: 'off' },
+    });
+    release(null);
+    await harness.call('twitch.status');
+    expect(harness.provider('stream.platform', KEY)).toBeDefined();
     await harness.stop();
   });
 
