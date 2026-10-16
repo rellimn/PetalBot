@@ -32,7 +32,7 @@ api.counter.changed.useEvent((event) => playSound());
 ```
 
 - **Shape:** `api.<contractId>.<member>` mirrors the qualified name. There's one namespace for the own contract and one per dependency, with only the members the client may use: for the panel, RPCs with `expose.panel` and events exposed to `panel`; for an overlay, what its declaration lists.
-- **Read or write comes from the contract:** RPCs with `kind: 'query'` get `useQuery(input?, { enabled, refetchInterval })` (a TanStack query). All other RPCs get `useMutation({ success?, error?, presentFailure?, onMutate?, onSuccess?, onError?, onSettled? })` (a TanStack mutation; `mutate()` takes no argument for RPCs without input). Every RPC has `call(input?)`, and every event has `useEvent(handler)`. `queries` accepts only query RPCs and `mutations` only mutation RPCs; a query not listed in `queries` is a plain query.
+- **Read or write comes from the contract:** RPCs with `kind: 'query'` get `useQuery(input?, { enabled, refetchInterval })` (a TanStack query). All other RPCs get `useMutation({ success?, error?, presentFailure?, onMutate?, onSuccess?, onError?, onSettled? })` (a TanStack mutation; `mutate()` takes no argument for RPCs without input). Every RPC has `call(input?)`, and every event has `useEvent(handler)`. `queries` accepts only query RPCs and `mutations` only mutation RPCs; a query not listed in `queries` is a plain query. `failures` maps failure codes to presenters (see [Failure presentation](#failure-presentation)).
 - **Freshness is declared once per client, not per component:**
 
 | Option                                            | On the event                           | Round trip | Good for                                             |
@@ -43,7 +43,7 @@ api.counter.changed.useEvent((event) => playSound());
 `update` runs once per cached entry (one per input); `input` is that entry's input. Return `data` unchanged when the event doesn't concern the entry, and a new object when it does (never mutate). It only runs when the entry has data and no fetch is in flight; otherwise the query refetches. Live queries refetch after a reconnect.
 
 - **Invalidation:** after a successful mutation, every query of the client's own contract (listed in `queries` or not) is refetched in this tab. `mutations: { name: { invalidates: [...] } }` replaces that list, and `[]` turns it off. Other tabs, users and overlays only learn about changes through events, so state that others display must be announced with an event.
-- **Toasts:** `success` and `error` (a string or a function) raise a toast. A decoded Result failure uses category fallback text or an explicit `presentFailure` callback; diagnostic `message` is never used automatically. Returned failures still resolve the mutation (`isSuccess`, `onSuccess`); only rejected calls invoke `onError`. Successful values alone trigger the success toast. Invalidation runs for every resolved value, including returned failures.
+- **Toasts:** `success` and `error` (a string or a function) raise a toast. A decoded Result failure uses the mutation's `presentFailure`, then the client's `failures` presenter for its code, then the category fallback; diagnostic `message` is never used automatically. Returned failures still resolve the mutation (`isSuccess`, `onSuccess`); only rejected calls invoke `onError`. Successful values alone trigger the success toast. Invalidation runs for every resolved value, including returned failures.
 - **Query for what _is_, `useEvent` for what _happened_:** displayed state comes from a query; `useEvent` is for sounds, animations, alerts and toasts.
 - **Hook rules:** `api.x.y.useQuery()` and the other handle methods are hooks. ESLint can't check member-chain calls, so never call them conditionally or in loops.
 
@@ -149,11 +149,11 @@ Cream. Densities: Comfortable (default), Compact. Each user picks them in the us
 
 ## Failure presentation
 
-`presentFailure(failure, presenter?)` is a pure helper returning user-facing text.
-`FailurePresenter<F extends Failure>` is `(failure: F) => string | undefined`. A presenter may
-handle only useful contextual cases and return `undefined` for the category fallback; an empty
-string is intentional. Exceptions from presenters propagate. The helper never reads diagnostic
-`message`, logs, or emits a toast.
+`presentFailure(failure, ...presenters)` is a pure helper returning user-facing text: the first
+presenter that returns a string wins, else the category fallback. `FailurePresenter<F extends
+Failure>` is `(failure: F) => string | undefined`. A presenter may handle only useful contextual
+cases and return `undefined` to fall through; an empty string is intentional. Exceptions from
+presenters propagate. The helper never reads diagnostic `message`, logs, or emits a toast.
 
 | Category         | Fallback                                            |
 | ---------------- | --------------------------------------------------- |
@@ -164,14 +164,28 @@ string is intentional. Exceptions from presenters propagate. The helper never re
 | `platform-error` | The external service could not complete the action. |
 | `custom`         | The action could not be completed.                  |
 
+Declare presenters once per client, by failure code. `failures` accepts exactly the codes the
+client's mutations return at the top level, and each presenter's parameter is that failure's
+exact payload (`FailurePresenters<F>`). Codes are unique per contract (`defineContract` checks
+it), so a code names one failure. Should two contracts of one client use a code for different
+failures, the presenter receives their union.
+
+```ts
+export const api = createPluginClient(counterContract, {
+  failures: {
+    // failure.error.counterId is typed; no annotation, no extra import.
+    'counter-not-found': (failure) => 'This counter no longer exists.',
+  },
+});
+```
+
+A mutation can override that with `presentFailure`, e.g. with text from props. Returning
+`undefined` falls through to the client presenter, then to the category fallback:
+
 ```ts
 const increment = api.counter.increment.useMutation({
   error: 'Could not count',
-  presentFailure: (failure) => {
-    // Exact declared payload, including failure.error.counterId.
-    if (failure.error.code === 'counter-not-found') return 'This counter no longer exists.';
-    return undefined;
-  },
+  presentFailure: () => `${counter.name} no longer exists.`,
 });
 ```
 

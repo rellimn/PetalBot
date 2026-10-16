@@ -7,6 +7,9 @@ export type UnionToIntersection<U> = (U extends unknown ? (arg: U) => void : nev
   ? I
   : never;
 
+/** True for a union of two or more distinct types. */
+export type IsUnion<T, Whole = T> = T extends Whole ? ([Whole] extends [T] ? false : true) : never;
+
 /** Merges a union of name->def maps into one map; `never` becomes `{}`. */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- `{}` = a map with no members
 export type MergeMaps<U> = [U] extends [never] ? {} : UnionToIntersection<U>;

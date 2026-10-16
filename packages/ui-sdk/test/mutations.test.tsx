@@ -529,3 +529,46 @@ it('does not interpret scalar or nested Result outputs as top-level failures', a
   expect(await screen.findByText('Broadcast returned')).toBeTruthy();
   expect(screen.queryByText('Broadcast failed')).toBeNull();
 });
+
+const presenting = createPluginClient(shop, {
+  failures: { 'sold-out': (failure) => `Item ${failure.error.itemId} is gone.` },
+});
+
+function PresentedBuy({ override }: { readonly override: (() => string | undefined) | undefined }) {
+  const buy = presenting.shop.buy.useMutation({
+    error: 'Could not buy',
+    ...(override === undefined ? {} : { presentFailure: override }),
+  });
+  return (
+    <Toaster>
+      <button
+        type="button"
+        onClick={() => {
+          buy.mutate({ id: 'a' });
+        }}
+      >
+        Buy
+      </button>
+    </Toaster>
+  );
+}
+
+describe('client failure presenters', () => {
+  const cases: [string, (() => string | undefined) | undefined, string][] = [
+    ['the client presenter', undefined, 'Item a is gone.'],
+    ['a mutation override', () => 'Overridden.', 'Overridden.'],
+    ['the client presenter after an undefined override', () => undefined, 'Item a is gone.'],
+  ];
+  it.each(cases)('uses %s', async (_name, override, text) => {
+    const { socket } = renderWithPetal(<PresentedBuy override={override} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Buy' }));
+    act(() => {
+      socket.answer('rpc', {
+        ok: false,
+        reason: 'custom',
+        error: { code: 'sold-out', itemId: 'a' },
+      });
+    });
+    expect(await screen.findByText(text)).toBeTruthy();
+  });
+});

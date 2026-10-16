@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 import { codecs } from '../src/codecs.ts';
-import { Result, defineFailure, fail, ok } from '../src/result.ts';
+import { Result, defineFailure, fail, failuresIn, ok } from '../src/result.ts';
 
 const group = defineFailure({
   code: 'group-not-found',
@@ -163,5 +163,16 @@ describe('ok / fail helpers', () => {
       error: { code: 'queue-full', capacity: 2 },
       message: 'no',
     });
+  });
+});
+
+describe('failuresIn', () => {
+  it('finds failure definitions anywhere inside a schema', () => {
+    const schema = z.object({
+      items: z.record(z.string(), Result(z.object({}), [group]).nullable()),
+      last: Result(z.object({}), [entity, group]).optional(),
+    });
+    expect(failuresIn(schema)).toEqual(new Set([group, entity]));
+    expect(failuresIn(z.object({ ok: z.boolean() }))).toEqual(new Set());
   });
 });

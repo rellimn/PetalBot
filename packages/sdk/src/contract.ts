@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import { choiceOf, type Choice } from './choice.ts';
-import type { EventDefsOf, MergeMaps, RpcDefsOf } from './type-utils.ts';
+import { failuresIn, type Failure, type FailureDefinition } from './result.ts';
+import type { EventDefsOf, IsUnion, MergeMaps, RpcDefsOf } from './type-utils.ts';
 
 export type Role = 'owner' | 'mod';
 export type ClientKind = 'panel' | 'overlay';
@@ -192,6 +193,28 @@ export type CheckChoices<C extends ContractShape> = [
       >;
     };
 
+type OutputOf<D> = D extends { output: infer O extends z.ZodType } ? z.output<O> : never;
+type ValuesOf<M> = M[keyof M];
+/** Failures that RPCs and provider methods return directly (nested ones are checked at runtime). */
+type ContractFailures<C> = Extract<
+  | (C extends { rpc: infer R } ? OutputOf<ValuesOf<R>> : never)
+  | (C extends { providers: infer P } ? OutputOf<ValuesOf<ValuesOf<P>>> : never),
+  Failure
+>;
+type DuplicateCodes<F extends Failure> = {
+  [K in F['error']['code']]: IsUnion<Extract<F, { error: { code: K } }>> extends true ? K : never;
+}[F['error']['code']];
+/** Fails `defineContract` when two different failures share a code. */
+export type CheckFailureCodes<C extends ContractShape> = [
+  DuplicateCodes<ContractFailures<C>>,
+] extends [never]
+  ? unknown
+  : {
+      readonly 'Failure codes must be unique per contract: define each failure once and reuse it': DuplicateCodes<
+        ContractFailures<C>
+      >;
+    };
+
 const ID_PATTERN = /^[a-z][a-z0-9-]*$/;
 const MEMBER_PATTERN = /^[a-zA-Z][a-zA-Z0-9]*$/;
 const SEMVER_PATTERN = /^\d+\.\d+\.\d+$/;
@@ -204,7 +227,7 @@ const RPC_KINDS: ReadonlySet<string> = new Set<RpcKind>(['query', 'mutation']);
  * Throws like `checkContract`.
  */
 export function defineContract<const C extends ContractShape>(
-  contract: C & CheckOverlays<C> & CheckChoices<C>,
+  contract: C & CheckOverlays<C> & CheckChoices<C> & CheckFailureCodes<C>,
 ): C {
   checkContract(contract);
   return contract;
@@ -212,7 +235,7 @@ export function defineContract<const C extends ContractShape>(
 
 /**
  * The runtime checks of `defineContract`: throws on malformed ids, versions, member names, RPC
- * kinds, widget ids, overlay declarations and `choice()` fields. The core runs them again when
+ * kinds, widget ids, overlay declarations, `choice()` fields and duplicate failure codes. The core runs them again when
  * it loads a plugin, because `definePlugin` accepts any object shaped like a contract.
  */
 export function checkContract(shape: ContractShape): void {
@@ -262,6 +285,36 @@ export function checkContract(shape: ContractShape): void {
     checkOverlay(shape, name, overlay);
   }
   checkChoices(shape);
+  checkFailureCodes(shape);
+}
+
+/**
+ * One failure definition per code in every schema of the contract: clients present failures by
+ * code, so the code alone must tell which failure it is. Reusing a definition is fine.
+ */
+function checkFailureCodes(contract: ContractShape): void {
+  const schemas: z.core.$ZodType[] = [
+    ...Object.values(contract.events ?? {}).map((def) => def.schema),
+    ...Object.values(contract.hooks ?? {}).map((def) => def.input),
+    ...Object.values(contract.rpc ?? {}).flatMap((def) =>
+      def.input === undefined ? [def.output] : [def.input, def.output],
+    ),
+    ...Object.values(contract.providers ?? {}).flatMap((slot) =>
+      Object.values(slot).flatMap((method) => [method.input, method.output]),
+    ),
+  ];
+  const codes = new Map<string, FailureDefinition>();
+  for (const schema of schemas) {
+    for (const definition of failuresIn(schema)) {
+      const other = codes.get(definition.code);
+      if (other !== undefined && other !== definition) {
+        throw new Error(
+          `Failure code "${definition.code}" has two definitions in contract "${contract.id}": define it once and reuse the definition`,
+        );
+      }
+      codes.set(definition.code, definition);
+    }
+  }
 }
 
 /** Names follow the member-name rule; user-settable secrets are labelled plain strings. */

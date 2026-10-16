@@ -34,4 +34,11 @@ export const api = createPluginClient(chatContract, {
     // The sent message comes back as chat.message from the platform; nothing to refetch.
     'chat.send': { invalidates: [] },
   },
+  // Codes not listed here get the generic text of their reason.
+  failures: {
+    'send-vetoed': () => 'Message blocked by a chat rule.',
+    'connection-not-found': () =>
+      'This chat connection is no longer available. Choose another connection.',
+    'ambiguous-target': () => 'Choose a chat connection before sending.',
+  },
 });

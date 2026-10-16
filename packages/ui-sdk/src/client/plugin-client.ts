@@ -10,7 +10,12 @@ import {
 import { useEffect, useEffectEvent } from 'react';
 import type { z } from 'zod';
 import type { ContractShape, EventEnvelope, Failure, NoMembers, Role } from '@petalbot/sdk';
-import { isFailure, presentFailure, type FailurePresenter } from '../failure.ts';
+import {
+  isFailure,
+  presentFailure,
+  type FailurePresenter,
+  type FailurePresenters,
+} from '../failure.ts';
 import { toast, type ToastInput } from '../components/Toaster.tsx';
 import type { OverlayEventName, OverlayName, OverlayRpcName, OverlayScope } from '../overlay.ts';
 import type { PetalConnection } from './connection.ts';
@@ -117,6 +122,12 @@ export type MutationDefinitions<M extends string, Q extends string> = [M] extend
   ? Readonly<Record<string, never>>
   : Partial<Readonly<Record<M, { readonly invalidates?: readonly Q[] }>>>;
 
+/** The failures the mutations in `M` return directly: what their toasts present. */
+export type MutationFailure<All extends ContractShape, M extends string> = Extract<
+  RpcOutput<All, M>,
+  Failure
+>;
+
 export interface QueryUseOptions {
   readonly enabled?: boolean;
   /** Poll every n milliseconds. */
@@ -137,7 +148,13 @@ export interface QueryHandle<In, Out> {
 
 type FailurePresentation<Output> = [Extract<Output, Failure>] extends [never]
   ? { readonly presentFailure?: never }
-  : { readonly presentFailure?: FailurePresenter<Extract<Output, Failure>> };
+  : {
+      /**
+       * Overrides the client's `failures` for this mutation, e.g. with text from props. Return
+       * undefined to fall back to the client's presenter for the code.
+       */
+      readonly presentFailure?: FailurePresenter<Extract<Output, Failure>>;
+    };
 
 export type MutationOptions<Input, Output, Context = unknown> = FailurePresentation<Output> & {
   /** A toast after success (for `Result` outputs: only for `{ ok: true }`). */
@@ -210,6 +227,7 @@ interface RuntimeDefinition {
   readonly mutations?: Readonly<
     Record<string, { readonly invalidates?: readonly string[] } | undefined>
   >;
+  readonly failures?: Readonly<Record<string, FailurePresenter<Failure> | undefined>>;
 }
 
 /** Which members of a contract the client may use. */
@@ -367,6 +385,7 @@ function mutationHandle<Input, Output>(
   schemas: WireSchemas,
   name: string,
   invalidates: readonly string[],
+  failures: NonNullable<RuntimeDefinition['failures']>,
 ) {
   function useMutation<Context>(
     options: MutationOptions<Input, Output, Context> = {},
@@ -384,9 +403,12 @@ function mutationHandle<Input, Output>(
         if (isFailure(data)) {
           if (options.error !== undefined) {
             // request decoded the operation schema before this envelope guard.
+            const failure = data as Extract<Output, Failure>;
+            const code = failure.error.code;
             const message = presentFailure(
-              data as Extract<Output, Failure>,
+              failure,
               options.presentFailure,
+              Object.hasOwn(failures, code) ? failures[code] : undefined,
             );
             toast(errorToast(options.error, { message }));
           }
@@ -443,6 +465,7 @@ function buildClient(
   const schemas = wireSchemas(contracts);
   const queries = definition.queries ?? {};
   const mutations = definition.mutations ?? {};
+  const failures = definition.failures ?? {};
   // The default invalidation: every query of the own contract this client can use.
   const ownQueries = Object.entries(own.rpc ?? {})
     .filter(([member, def]) => def.kind === 'query' && allowed.rpc(`${own.id}.${member}`, def))
@@ -467,6 +490,7 @@ function buildClient(
               name,
               (Object.hasOwn(mutations, name) ? mutations[name]?.invalidates : undefined) ??
                 ownQueries,
+              failures,
             );
     }
     for (const [member, def] of Object.entries(contract.events ?? {})) {
@@ -482,7 +506,8 @@ function buildClient(
  * The typed client of a plugin's panel code: `api.<contractId>.<member>` for the own contract and
  * every dependency. Create it once at module scope (the React Compiler needs stable hooks).
  * RPCs the contract declares as `kind: 'query'` get `useQuery`; all others get `useMutation`.
- * `queries` only says how queries stay fresh, `mutations` what they invalidate.
+ * `queries` only says how queries stay fresh, `mutations` what they invalidate, `failures` how
+ * the mutation toasts present each failure code.
  */
 export function createPluginClient<
   const Own extends ContractShape,
@@ -499,6 +524,12 @@ export function createPluginClient<
     readonly mutations?: MutationDefinitions<
       MutationRpcName<Own | Deps[number], PanelRpcName<Own | Deps[number]>>,
       QueryRpcName<Own | Deps[number], PanelRpcName<Own | Deps[number]>>
+    >;
+    readonly failures?: FailurePresenters<
+      MutationFailure<
+        Own | Deps[number],
+        MutationRpcName<Own | Deps[number], PanelRpcName<Own | Deps[number]>>
+      >
     >;
   } = {},
 ): ClientApi<
@@ -534,6 +565,9 @@ export function createOverlayClient<const C extends ContractShape, const N exten
     readonly mutations?: MutationDefinitions<
       MutationRpcName<OverlayScope<C, N>, OverlayRpcName<C, N>>,
       QueryRpcName<OverlayScope<C, N>, OverlayRpcName<C, N>>
+    >;
+    readonly failures?: FailurePresenters<
+      MutationFailure<OverlayScope<C, N>, MutationRpcName<OverlayScope<C, N>, OverlayRpcName<C, N>>>
     >;
   } = {},
 ): ClientApi<OverlayScope<C, N>, OverlayRpcName<C, N>, OverlayEventName<C, N>> {

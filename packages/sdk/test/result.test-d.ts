@@ -194,3 +194,31 @@ it('preserves required never fields in nonempty schemas', () => {
   const generic: Result<{ value: never }> = { ok: true };
   expectTypeOf(generic).not.toBeNever();
 });
+
+describe('failure codes per contract', () => {
+  it('rejects two different failures with one code', () => {
+    const missing = defineFailure({ code: 'missing', reason: 'not-found', details: z.object({}) });
+    const alsoMissing = defineFailure({
+      code: 'missing',
+      reason: 'custom',
+      details: z.object({ id: z.string() }),
+    });
+    defineContract({
+      id: 'reuse',
+      version: '1.0.0',
+      rpc: {
+        get: { output: Result(z.object({}), [missing]) },
+        remove: { output: Result(z.object({}), [missing]) },
+      },
+    });
+    // @ts-expect-error -- "missing" names two different failures
+    defineContract({
+      id: 'clash',
+      version: '1.0.0',
+      rpc: {
+        get: { output: Result(z.object({}), [missing]) },
+        remove: { output: Result(z.object({}), [alsoMissing]) },
+      },
+    });
+  });
+});

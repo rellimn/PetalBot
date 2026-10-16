@@ -4,8 +4,8 @@
  * Runs in the panel. Created once at module scope: the React Compiler needs the hooks behind it
  * to be the same functions on every render (see docs/plugin-guide.md#10-watch-out-for). The
  * contract decides which RPCs are reads (`kind: 'query'`: useQuery) and which are writes
- * (useMutation). This definition decides, once for every component, how the reads stay fresh
- * and what the writes refetch; reads not listed here are plain queries.
+ * (useMutation). This definition decides, once for every component, how the reads stay fresh,
+ * what the writes refetch and how their failures read; reads not listed here are plain queries.
  *
  * Guide: docs/plugin-guide.md#5-the-client.
  * Read next: src/panel.tsx.
@@ -45,5 +45,11 @@ export const api = createPluginClient(counterContract, {
     // Without `invalidates`, a mutation refetches all of the counter's queries in this tab.
     'counter.increment': { invalidates: [] },
     'counter.reset': { invalidates: [] },
+  },
+  // The toast text of each failure code, for every mutation that returns it. A component may
+  // override it with `presentFailure` (see CounterRow in src/panel.tsx). Return undefined for
+  // the reason's generic text.
+  failures: {
+    'counter-not-found': () => 'This counter no longer exists.',
   },
 });

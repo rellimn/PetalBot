@@ -57,7 +57,7 @@ describe('Counters page', () => {
         message: 'DIAGNOSTIC_ONLY',
       });
     });
-    expect(await screen.findByText('This counter no longer exists.')).toBeTruthy();
+    expect(await screen.findByText('Deaths no longer exists.')).toBeTruthy();
     expect(screen.queryByText('DIAGNOSTIC_ONLY')).toBeNull();
   });
 

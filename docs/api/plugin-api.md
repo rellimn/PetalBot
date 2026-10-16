@@ -427,24 +427,16 @@ const missing = fail(entityNotFound, { groupId: 'g', entityId: 'e' });
 ```
 
 ```ts
-// client-only presenter: imports the contract, never the server
-import type { z } from 'zod';
-import type { Failure } from '@petalbot/sdk';
-import { presentFailure } from '@petalbot/ui-sdk';
-import { ReadEntityResult } from './contract.ts';
-
-function presentReadFailure(failure: Extract<z.output<typeof ReadEntityResult>, Failure>): string {
-  const error = failure.error;
-  switch (error.code) {
-    case 'group-not-found':
-      return `Group ${error.groupId} no longer exists.`;
-    case 'entity-not-found':
-      return `Entity ${error.entityId} is missing from group ${error.groupId}.`;
-  }
-  error satisfies never;
-}
-// useMutation({ error: 'Could not read', presentFailure: presentReadFailure })
-// Or for a manually handled result: presentFailure(result, presentReadFailure)
+// client.ts: presenters by code, typed from the contract
+export const api = createPluginClient(contract, {
+  failures: {
+    'group-not-found': (failure) => `Group ${failure.error.groupId} no longer exists.`,
+    'entity-not-found': (failure) =>
+      `Entity ${failure.error.entityId} is missing from group ${failure.error.groupId}.`,
+  },
+});
+// useMutation({ error: 'Could not read' }) presents with these; a mutation may override them
+// with presentFailure. For a manually handled result: presentFailure(result, presenter)
 ```
 
 `defineFailure` returns `code`, `reason` and `schema`. `fail(definition, details, message?)`
@@ -452,8 +444,13 @@ constructs that schema's **input**, without parsing it; the RPC/provider boundar
 If a variable holds several possible definitions, narrow it by `definition.code` before calling
 `fail` so the selected definition and required details stay correlated.
 `message` is optional developer diagnostics, never automatic UI copy. Put only caller-appropriate
-data in public details. Use explicit client presenters plus category fallbacks (see
-[UI SDK](ui-sdk.md#failure-presentation)); no presenter registry or diagnostic fallback exists.
+data in public details. Use client presenters plus category fallbacks (see
+[UI SDK](ui-sdk.md#failure-presentation)); no diagnostic fallback exists.
+
+A failure code names one definition per contract: `defineContract` rejects two different
+definitions with the same code anywhere in its schemas (RPCs, providers, events, hooks, also
+nested). Reusing one definition in several operations is fine. `failuresIn(schema)` returns the
+definitions a schema contains.
 
 Codec fields keep input/output distinct. For `{ at: codecs.isoDate() }`, producers supply an
 ISO string and consumers receive a Date. A domain forwarding a decoded provider result through

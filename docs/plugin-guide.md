@@ -305,9 +305,21 @@ export const api = createPluginClient(counterContract, {
   already keep things live. Other tabs, users and overlays only learn about changes through
   events.
 - **Toasts.** `useMutation({ error: 'Could not count' })` shows a toast on failure; a failed
-  `Result` counts as a failure. Descriptions come from category fallbacks or an explicit
-  `presentFailure` callback, never diagnostic `message`. Returned failures still invoke
-  `onSuccess`; rejected calls invoke `onError`.
+  `Result` counts as a failure. Its description comes from the client's `failures` (one
+  presenter per failure code, declared next to `mutations`), else from the reason's generic
+  text, never from diagnostic `message`. Returned failures still invoke `onSuccess`; rejected
+  calls invoke `onError`.
+
+  ```ts
+  failures: {
+    'counter-not-found': () => 'This counter no longer exists.',
+  },
+  ```
+
+  Each presenter receives exactly its failure, details included, without any type annotation.
+  For text that depends on the component (a name from props), pass `presentFailure` to
+  `useMutation`; it is typed from the RPC as well, and returning `undefined` falls back to the
+  client's presenter.
 
 ## 6. The panel
 

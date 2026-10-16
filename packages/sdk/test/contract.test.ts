@@ -7,6 +7,7 @@ import {
   type OverlayDef,
 } from '../src/contract.ts';
 import { Choices, choice } from '../src/choice.ts';
+import { Result, defineFailure } from '../src/result.ts';
 
 describe('defineContract', () => {
   it('returns the contract unchanged', () => {
@@ -258,5 +259,64 @@ describe('defineContract secrets', () => {
     expect(() => defineContract(shape)).toThrow(
       'Secret "tokens" of contract "twitch": keyed must be true or false',
     );
+  });
+});
+
+describe('defineContract failure codes', () => {
+  const missing = defineFailure({ code: 'missing', reason: 'not-found', details: z.object({}) });
+  const alsoMissing = defineFailure({ code: 'missing', reason: 'custom', details: z.object({}) });
+
+  it('accepts one definition reused across RPCs and providers', () => {
+    const shape: ContractShape = {
+      id: 'quotes',
+      version: '1.0.0',
+      rpc: {
+        get: { output: Result(z.object({}), [missing]) },
+        remove: { output: Result(z.object({}), [missing]) },
+      },
+      providers: {
+        store: { load: { input: z.object({}), output: Result(z.object({}), [missing]) } },
+      },
+    };
+    expect(() => {
+      checkContract(shape);
+    }).not.toThrow();
+  });
+
+  it('rejects two definitions of one code, also when nested or in a provider', () => {
+    const message = 'Failure code "missing" has two definitions in contract "quotes"';
+    const top: ContractShape = {
+      id: 'quotes',
+      version: '1.0.0',
+      rpc: {
+        get: { output: Result(z.object({}), [missing]) },
+        remove: { output: Result(z.object({}), [alsoMissing]) },
+      },
+    };
+    expect(() => {
+      checkContract(top);
+    }).toThrow(message);
+    const nested: ContractShape = {
+      id: 'quotes',
+      version: '1.0.0',
+      rpc: {
+        get: { output: Result(z.object({}), [missing]) },
+        all: { output: z.record(z.string(), Result(z.object({}), [alsoMissing]).nullable()) },
+      },
+    };
+    expect(() => {
+      checkContract(nested);
+    }).toThrow(message);
+    const provider: ContractShape = {
+      id: 'quotes',
+      version: '1.0.0',
+      rpc: { get: { output: Result(z.object({}), [missing]) } },
+      providers: {
+        store: { load: { input: z.object({}), output: Result(z.object({}), [alsoMissing]) } },
+      },
+    };
+    expect(() => {
+      checkContract(provider);
+    }).toThrow(message);
   });
 });

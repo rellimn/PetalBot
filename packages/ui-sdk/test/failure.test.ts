@@ -41,6 +41,28 @@ describe('user-facing failure presentation', () => {
     ).toThrow('presenter bug');
   });
 
+  it('uses the first presenter that returns text', () => {
+    const failure = { ok: false as const, reason: 'custom' as const, error: { code: 'busy' } };
+    expect(
+      presentFailure(
+        failure,
+        undefined,
+        () => undefined,
+        () => 'Second.',
+      ),
+    ).toBe('Second.');
+    expect(
+      presentFailure(
+        failure,
+        () => 'First.',
+        () => 'Second.',
+      ),
+    ).toBe('First.');
+    expect(presentFailure(failure, undefined, () => undefined)).toBe(
+      'The action could not be completed.',
+    );
+  });
+
   it('recognizes message-free envelopes without stripping their payload', () => {
     const value = { ok: false, reason: 'custom', error: { code: 'busy', capacity: 2 } };
     expect(isFailure(value)).toBe(true);

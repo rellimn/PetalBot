@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { IsUnion } from './type-utils.ts';
 
 export const FAILURE_REASONS = [
   'unsupported',
@@ -60,10 +61,42 @@ export function defineFailure<
     error,
     message: z.string().optional(),
   }) as unknown as z.ZodType<Envelope<C, R, z.output<D>>, Envelope<C, R, z.input<D>>>;
-  return { code, reason, schema };
+  const definition = { code, reason, schema };
+  definitions.set(schema, definition);
+  return definition;
 }
 
-type IsUnion<T, Whole = T> = T extends Whole ? ([Whole] extends [T] ? false : true) : never;
+/** Envelope schemas of `defineFailure`, so contract checks can find them inside any schema. */
+const definitions = new WeakMap<z.core.$ZodType, FailureDefinition>();
+
+/**
+ * Every failure definition used anywhere inside `schema` (nested in objects, records, unions,
+ * pipes and so on). Does not look into `z.lazy`.
+ */
+export function failuresIn(schema: z.core.$ZodType): Set<FailureDefinition> {
+  const found = new Set<FailureDefinition>();
+  const seen = new Set<z.core.$ZodType>();
+  const visit = (node: z.core.$ZodType): void => {
+    if (seen.has(node)) return;
+    seen.add(node);
+    const definition = definitions.get(node);
+    if (definition !== undefined) found.add(definition);
+    // Child schemas sit directly in the def, in arrays (union options) or in objects (shape).
+    const def = node._zod.def as unknown as Readonly<Record<string, unknown>>;
+    for (const value of Object.values(def)) {
+      const children = Array.isArray(value)
+        ? value
+        : typeof value === 'object' && value !== null && !(value instanceof z.core.$ZodType)
+          ? Object.values(value)
+          : [value];
+      for (const child of children) {
+        if (child instanceof z.core.$ZodType) visit(child);
+      }
+    }
+  };
+  visit(schema);
+  return found;
+}
 
 export function fail<D extends FailureDefinition>(
   // Narrow a union definition first so its payload stays correlated with its code.

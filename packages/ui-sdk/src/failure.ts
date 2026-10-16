@@ -12,13 +12,30 @@ const FALLBACKS = {
   custom: 'The action could not be completed.',
 } satisfies Record<FailureReason, string>;
 
-/** Present an expected failure without falling back to developer diagnostics. */
+/**
+ * Present an expected failure without falling back to developer diagnostics. The first presenter
+ * that returns text wins; without one, the reason's fallback.
+ */
 export function presentFailure<F extends Failure>(
   failure: F,
-  presenter?: FailurePresenter<F>,
+  ...presenters: readonly (FailurePresenter<F> | undefined)[]
 ): string {
-  return presenter?.(failure) ?? FALLBACKS[failure.reason];
+  for (const presenter of presenters) {
+    const text = presenter?.(failure);
+    if (text !== undefined) return text;
+  }
+  return FALLBACKS[failure.reason];
 }
+
+/**
+ * Presenters by failure code, declared once per client: `failures: { 'counter-not-found': ... }`.
+ * Each presenter receives exactly the failure of its code.
+ */
+export type FailurePresenters<F extends Failure> = [F] extends [never]
+  ? Readonly<Record<string, never>>
+  : {
+      readonly [K in F['error']['code']]?: FailurePresenter<Extract<F, { error: { code: K } }>>;
+    };
 
 const reasons: ReadonlySet<string> = new Set(FAILURE_REASONS);
 

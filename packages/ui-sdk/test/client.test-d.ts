@@ -334,3 +334,18 @@ export function UsesPresenters() {
   });
   return null;
 }
+
+createPluginClient(counter, {
+  dependencies: [chat],
+  failures: {
+    'counter-not-found': (failure) => {
+      expectTypeOf(failure.reason).toEqualTypeOf<'not-found'>();
+      expectTypeOf(failure.error.counterId).toEqualTypeOf<string>();
+      return undefined;
+    },
+    // @ts-expect-error -- no mutation of the client returns this code
+    'chat-down': () => 'wrong',
+  },
+});
+// @ts-expect-error -- a client without failing mutations accepts no presenters
+createPluginClient(chat, { failures: { 'counter-not-found': () => 'wrong' } });
