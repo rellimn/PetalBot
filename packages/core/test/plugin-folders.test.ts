@@ -16,7 +16,7 @@ async function folder(root: string, name: string, pkg: unknown, built: boolean):
 describe('builtPluginFolders', () => {
   it('lists plugin folders that were built once, and nothing else', async () => {
     const root = await mkdtemp(join(tmpdir(), 'petalbot-folders-'));
-    const plugin = { name: 'x', version: '1.0.0', petalbot: { id: 'x', apiVersion: 2 } };
+    const plugin = { name: 'x', version: '1.0.0', petalbot: { id: 'x', apiVersion: 3 } };
     const built = await folder(root, 'built', plugin, true);
     await folder(root, 'installing', plugin, false);
     await folder(root, 'library', { name: 'lib', version: '1.0.0' }, true);
@@ -33,7 +33,7 @@ describe('builtPluginFolders', () => {
 describe('watchBuiltPlugins', () => {
   it('starts one watcher per built folder, and a new one after its watcher exited', async () => {
     const root = await mkdtemp(join(tmpdir(), 'petalbot-watchers-'));
-    const plugin = { name: 'x', version: '1.0.0', petalbot: { id: 'x', apiVersion: 2 } };
+    const plugin = { name: 'x', version: '1.0.0', petalbot: { id: 'x', apiVersion: 3 } };
     const dir = await folder(root, 'quotes', plugin, true);
     const watching = new Set<string>();
     const started: string[] = [];

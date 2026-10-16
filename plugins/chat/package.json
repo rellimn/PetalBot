@@ -13,7 +13,7 @@
   },
   "petalbot": {
     "id": "chat",
-    "apiVersion": 2
+    "apiVersion": 3
   },
   "dependencies": {
     "@petalbot/sdk": "workspace:*",

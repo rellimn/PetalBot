@@ -32,7 +32,7 @@ export function packageJson(p: TemplateParams): string {
       typecheck: 'tsc -p tsconfig.json',
       ...(p.db ? { 'db:generate': 'drizzle-kit generate' } : {}),
     },
-    petalbot: { id: p.id, apiVersion: 2 },
+    petalbot: { id: p.id, apiVersion: 3 },
     dependencies: pick([
       '@petalbot/sdk',
       'zod',

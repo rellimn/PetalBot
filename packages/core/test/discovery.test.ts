@@ -28,7 +28,7 @@ async function writePackage(
 const manifest = (id: string, extra: Record<string, unknown> = {}) => ({
   name: `@petalbot-plugin/${id}`,
   version: '1.2.3',
-  petalbot: { id, apiVersion: 2, ...extra },
+  petalbot: { id, apiVersion: 3, ...extra },
 });
 
 describe('discoverPlugins', () => {
@@ -46,20 +46,20 @@ describe('discoverPlugins', () => {
       id: 'quotes',
       version: '1.2.3',
       dir: quotesDir,
-      manifest: { id: 'quotes', apiVersion: 2, dependencies: {}, optionalDependencies: {} },
+      manifest: { id: 'quotes', apiVersion: 3, dependencies: {}, optionalDependencies: {} },
       entries: { server: 'dist/server.js', overlays: {} },
     });
   });
 
-  it('accepts API 2 and rejects API 1 explicitly', async () => {
+  it('accepts API 3 and rejects API 2 explicitly', async () => {
     const dir = await root();
-    const legacy = await writePackage(dir, 'legacy', manifest('legacy', { apiVersion: 1 }));
-    await writePackage(dir, 'current', manifest('current', { apiVersion: 2 }));
+    const legacy = await writePackage(dir, 'legacy', manifest('legacy', { apiVersion: 2 }));
+    await writePackage(dir, 'current', manifest('current', { apiVersion: 3 }));
     const result = await discoverPlugins([dir]);
     expect([...result.plugins.keys()]).toEqual(['current']);
     expect(result.problems).toHaveLength(1);
     expect(result.problems[0]?.dir).toBe(legacy);
-    expect(result.problems[0]?.message).toMatch(/is not supported.*supported: 2/);
+    expect(result.problems[0]?.message).toMatch(/is not supported.*supported: 3/);
   });
 
   it('reports broken manifests without losing valid plugins', async () => {

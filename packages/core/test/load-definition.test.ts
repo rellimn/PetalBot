@@ -17,7 +17,7 @@ async function pluginWith(
     dir,
     manifest: {
       id: 'hello',
-      apiVersion: 2,
+      apiVersion: 3,
       dependencies: manifest.dependencies ?? {},
       optionalDependencies: {},
     },

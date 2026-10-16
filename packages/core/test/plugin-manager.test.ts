@@ -27,7 +27,7 @@ async function writeManifest(
     JSON.stringify({
       name: id,
       version: '1.0.0',
-      petalbot: { id, apiVersion: 2, dependencies },
+      petalbot: { id, apiVersion: 3, dependencies },
     }),
   );
   await writeBuild(dir);
