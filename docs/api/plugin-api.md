@@ -1,4 +1,4 @@
-# PetalBot Plugin API (apiVersion 2)
+# PetalBot Plugin API (apiVersion 3)
 
 This is the reference for plugin authors. The browser-facing APIs are generated:
 `docs/api/openapi.json` (HTTP) and `docs/api/asyncapi.json` (WebSocket). The UI SDK
@@ -17,7 +17,7 @@ A plugin is a workspace package. `package.json` names the plugin and its depende
   "scripts": { "build": "vite build", "dev": "vite build --watch" },
   "petalbot": {
     "id": "alerts", // ^[a-z][a-z0-9-]*$, not "core" or "petalbot"
-    "apiVersion": 2,
+    "apiVersion": 3,
     "dependencies": { "stream": "^1.0.0" }, // ranges match dependency contract versions
     "optionalDependencies": {},
   },
@@ -54,9 +54,16 @@ export const alertsContract = defineContract({
   rpc: {
     recent: { kind: 'query', output: z.array(Alert), expose: { panel: 'mod', overlay: true } }, // no input
 
-    clear: { output: Result(z.object({}), []), expose: { panel: 'owner' } },
+    clear: { output: Result(z.object({}), []), expose: { panel: 'owner' }, timeoutMs: 10_000 },
   },
-  providers: { sink: { show: { input: Alert, output: z.object({}) } } },
+  providers: {
+    sink: {
+      key: ConnectionId,
+      info: z.object({ label: z.string() }),
+      methods: { show: { input: Alert, output: z.object({}), timeoutMs: 8000 } },
+      inbound: { dismissed: z.object({ alertId: z.string() }) },
+    },
+  },
   widgets: { latest: { config: z.object({ count: z.number().int().default(3) }) } },
   overlays: {
     box: {
@@ -76,11 +83,19 @@ export const alertsContract = defineContract({
 | `events`    | Fire-and-forget fan-out. Only the owner emits. `expose` makes an event reachable from the panel and/or overlays.                                                                                                                                                                                             |
 | `hooks`     | Awaited, ordered pipeline that can modify or veto. Only the owner runs it; dependents tap it. Browsers never see hooks.                                                                                                                                                                                      |
 | `rpc`       | Request/response, validated both ways. `kind: 'query'` marks a read that clients may repeat freely (`useQuery`); without it the RPC is a mutation (`useMutation`). `expose.panel` is the minimum role; `expose.overlay: true` allows overlays.                                                               |
-| `providers` | Interfaces dependents implement, keyed by a connection id. Every method is optional for implementers.                                                                                                                                                                                                        |
+| `providers` | Slots dependents provide into, one registration per key. Up to four parts: `key` (a string schema for the keys), `info` (an object schema each registration carries; required when declared), `methods` (owner -> provider, each optional for implementers) and `inbound` (provider -> owner pushes, by name). |
 | `widgets`   | Every dashboard widget, with an optional per-instance `config`. Titles and components live in `definePanel`.                                                                                                                                                                                                 |
 | `overlays`  | Each overlay's instance config and the exact events and RPCs it may use. Names must be exposed to `overlay` and come from the own contract or the overlay's `dependencies`. Wrong names are compile errors and also fail at runtime. Overlay names match `^[a-z][a-z0-9-]*$`.                                |
 
-RPCs without `input` take none: `ctx.call('alerts.recent')`. Member names must be unique across
+RPCs without `input` take none: `ctx.call('alerts.recent')`. An RPC or a provider method may declare
+`timeoutMs` (an integer from 1 to 120 000): how long callers wait by default. A caller's own
+`timeoutMs` wins; otherwise the default is 5 s.
+
+**Flow marks** (read by the flow engine from M6a on; inert until then): an event may declare
+`flow: { label, description?, filter? }` (a trigger; `filter` names top-level payload fields), an
+RPC `flow: { label, description?, retryable? }` (a mutation is a step, a query a value;
+`retryable: true` promises that a `rate-limited` failure of the whole RPC changed nothing and is
+for mutations only). Member names must be unique across
 `events`, `hooks`, `rpc` and `providers`. `choice('<own rpc>')` makes a string field whose valid
 values an own RPC lists at runtime (`kind: 'query'`, no input, output `Choices`, `expose.panel`). It's allowed in
 top-level fields of `settings`, widget `config` and overlay `config`.
@@ -112,11 +127,16 @@ export default definePlugin(alertsContract, {
 
 `setup` returns the RPC implementations. Every RPC of the contract must be implemented (checked at
 compile time and at start), and they become callable once `setup` has resolved; calls before that
-fail with `PluginUnavailableError`. Each implementation gets `(input, { caller, client, who })`:
+fail with `PluginUnavailableError`. Each implementation gets `(input, { caller, client, who, actor, via })`:
 
 - `caller` is the calling plugin's id, or `'client'` for calls from a browser.
 - `client` is then `{ kind: 'panel', user: { id, name, role } }` or `{ kind: 'overlay', instanceId }`.
-- `who` is a display label: the panel user's name, `'overlay'`, or the calling plugin's id.
+- `actor` is who caused the call (`Actor` from `@petalbot/sdk`): `{ kind: 'user', user }`,
+  `{ kind: 'overlay', instanceId }`, `{ kind: 'plugin', pluginId }`, `{ kind: 'viewer', viewer }`
+  or `{ kind: 'flow', flowId, name }`. It travels along nested calls, hooks and the events they
+  emit (envelopes carry `actor` too); a plugin acting on its own is the actor of its calls.
+- `via` names what acted on the actor's behalf (`{ kind: 'flow', flowId, name, runId }`), if anything.
+- `who` is `describeActor(actor)`: the user's or viewer's name, `'overlay'`, a plugin id or a flow name.
 
 ## `ctx` reference
 
@@ -126,8 +146,9 @@ fail with `PluginUnavailableError`. Each implementation gets `(input, { caller, 
 | `on(event, handler)`                                                                      | Own and (optional) dependency events. Each subscription has its own FIFO queue.                                                                                                                                                                                                                                                                               |
 | `emit(event, payload)`                                                                    | Own events only. Validated synchronously; an invalid payload throws `ValidationError`.                                                                                                                                                                                                                                                                        |
 | `hook(name, handler, { priority })` / `runHook(name, input)`                              | Tap a hook / run an own hook. A handler returns the modified input, nothing, or `veto(reason)`.                                                                                                                                                                                                                                                               |
-| `call(rpc, input?, { timeoutMs })`                                                        | Dependency RPCs (default timeout 5 s); RPCs without input take none. Throws `ValidationError`, `PluginUnavailableError`, `RpcTimeoutError`.                                                                                                                                                                                                                   |
-| `provide(slot, key, impl)` / `providers(slot)`                                            | Implement a dependency's provider slot / resolve the providers of an own slot: `keys()`, `get(key)` (a handle with `methods`, `has` and `call`) and `onChange(fn)`, called with `{ key, pluginId, change: 'added' \| 'removed' }` after every registration and removal, also when the implementing plugin stops (no replay: `keys()` lists the current ones). |
+| `call(rpc, input?, { timeoutMs })`                                                        | Dependency RPCs (timeout: the option, else the RPC's `timeoutMs`, else 5 s); RPCs without input take none. Throws `ValidationError`, `PluginUnavailableError`, `RpcTimeoutError`.                                                                                                                                                                             |
+| `provide(slot, key, { info, methods })`                                                   | Register in a dependency's slot. Validates `key` and `info` (required when the slot declares it). Returns `{ key, push(name, payload), update(info), dispose() }`: `push` validates at once and delivers to the owner in order; `update` replaces the info; both are no-ops after `dispose`.                                                                   |
+| `providers(slot)`                                                                         | Resolve an own slot: `keys()`, `list()`, `get(key)` (handles with `info`, `methods`, `has` and `call`, which applies the method's timeout and throws `ProviderTimeoutError`), `on(name, (payload, provider) => ...)` for pushes (one queue per plugin and slot) and `onChange(fn)` with `{ key, pluginId, change: 'added' \| 'updated' \| 'removed' }`, also when the implementing plugin stops (no replay). |
 | `settings.get()` / `settings.onChange(fn)`                                                | Validated settings; the panel edits them.                                                                                                                                                                                                                                                                                                                     |
 | `kv.get/set/delete(key)`                                                                  | Declared keys only; values must survive JSON. `set(key, undefined)` deletes.                                                                                                                                                                                                                                                                                  |
 | `kv.update(key, updater)`                                                                 | Atomic read-modify-write: a synchronous `updater(current)` runs in one transaction; `undefined` deletes. A throwing, async or invalid updater writes nothing.                                                                                                                                                                                                 |
@@ -359,6 +380,20 @@ the schema's output type on both ends.
 - If the browser receives something that does not match its contract (e.g. a dependency changed
   incompatibly), the event is dropped and the call rejects with `ClientError` code `validation`.
 
+## Platform types
+
+`@petalbot/sdk` exports the platform vocabulary every domain shares, as zod schemas with
+same-named types:
+
+- `PlatformId` (`twitch`, `^[a-z][a-z0-9-]*$`) and `ConnectionId` (`<platform>:<channel>`, e.g.
+  `twitch:roman`).
+- `Source` `{ platform, connection }`, and `Target`: `{ connection }` or `{ platform }`.
+- `PlatformUser` `{ id, login, displayName }` and `Viewer` (a `PlatformUser` with its `platform`
+  and `connection`).
+- `Actor`, `Via` and `describeActor(actor)` (see the server entry).
+- `sourceOf('twitch:roman')` returns `{ platform: 'twitch', connection: 'twitch:roman' }` and
+  throws `TypeError` for anything that isn't a connection id.
+
 ## Rate limiting
 
 Platform plugins limit their own outbound calls (spec §6.6):
@@ -377,7 +412,8 @@ if (!result.ok) return result; // { ok: false, reason: 'rate-limited', error: { 
 ## Errors and results
 
 Infrastructure failures throw `PetalBotError` subclasses: `ValidationError`,
-`PluginUnavailableError`, `RpcTimeoutError`, `AccessError`, `ContractVersionError`. Rejected
+`PluginUnavailableError`, `RpcTimeoutError`, `ProviderTimeoutError` (a provider method took longer
+than its timeout; it may still complete afterwards), `AccessError`, `ContractVersionError`. Rejected
 browser calls carry `{ code, message }`; `PetalBotError` messages pass through, other exceptions
 become `internal`.
 
@@ -481,6 +517,10 @@ This migration requires SDK/UI SDK `1.0.0` and `petalbot.apiVersion: 2` (API 1 i
 Chat is `2.0.0`, counter `4.0.0`; stream stays `1.0.0` and targets API 2. Rebuild plugins and
 update actual dependency ranges to `chat: ^2.0.0` / `counter: ^4.0.0`.
 
+The provider-slot change that followed (M5p) requires SDK `2.0.0` and `petalbot.apiVersion: 3`
+(API 2 is rejected). Chat is `3.0.0`, stream `2.0.0`; counter stays `4.0.0`. See the server
+entry and the `ctx` reference above.
+
 ## Defaults and limits
 
 | What                         | Value                                                                                  |
@@ -516,16 +556,22 @@ await harness.stop();
 const harness = await createTestHarness(chatPlugin, {
   secrets: { apiKey: 'k', tokens: { '42': { accessToken: 'a' } } },
   providers: {
-    'chat.platform': { 'twitch:test': { send: async ({ text }) => ({ messageId: text }) } },
+    'chat.platform': {
+      'twitch:test': { info, methods: { send: async ({ text }) => ({ messageId: text }) } },
+    },
   },
   publicUrl: 'https://bot.example.com',
 });
 await harness.setSecret('apiKey', 'k-2'); // fires onChange
-const remove = harness.addProvider('chat.platform', 'twitch:other', fake);
+const conn = harness.addProvider('chat.platform', 'twitch:other', { info, methods: fake });
+conn.push('message', message); // as the platform would
+conn.dispose();
 const handle = harness.provider('chat.platform', 'twitch:main'); // implementer under test
+await harness.idle();
+harness.pushed('chat.platform', 'twitch:main'); // [{ name: 'message', payload }, ...]
 ```
 
-`secrets` seeds stored values and `setSecret(name, [key,] value)` writes one as the panel would, firing `onChange`. `providers` fills the plugin's own slots with fakes before it starts; `addProvider` adds one mid-test. For a plugin that implements a dependency's slot, `provider(slot, key)` returns the handle the slot owner would see. Fake providers and `harness.call` come from the same harness plugin.
+`secrets` seeds stored values and `setSecret(name, [key,] value)` writes one as the panel would, firing `onChange`. `providers` fills the plugin's own slots with fakes before it starts; `addProvider` adds one mid-test and returns its registration (`push`, `update`, `dispose`). For a plugin that implements a dependency's slot, `provider(slot, key)` returns the handle the slot owner would see and `pushed(slot, key)` lists what it pushed. Fake providers and `harness.call` come from the same harness plugin.
 
 `createTestHarness` (from `@petalbot/testing`) runs the plugin in a real Kernel on an in-memory database, with its dependencies replaced by typed fakes.
 

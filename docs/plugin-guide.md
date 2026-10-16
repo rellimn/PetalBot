@@ -165,8 +165,10 @@ Drizzle table, so the table can change without breaking anyone who depends on th
 `src/server.ts` default-exports `definePlugin(contract, { kv?, db?, dependencies?, setup })`.
 `setup(ctx)` runs on every start (enable, reload) and returns the RPC implementations; they
 become callable once `setup` has finished. TypeScript checks that every RPC is implemented.
-Each implementation gets `(input, { caller, client, who })`; `who` is a display label (the
-panel user's name, `'overlay'`, or the calling plugin's id).
+Each implementation gets `(input, { caller, client, who, actor, via })`. `actor` is who caused
+the call: a panel user, an overlay, a plugin, a chat viewer or a flow; it travels along nested
+calls and events, so a plugin that calls you on a user's behalf passes that user on. `who` is its
+display label (the user's or viewer's name, `'overlay'`, or a plugin id).
 
 ```ts
 // plugins/counter/src/server.ts
@@ -587,7 +589,7 @@ including ones added later.
 ### Using the domains
 
 Depend on the domain like on any plugin (section 9): in `package.json`, list it under
-`petalbot.dependencies` (`"chat": "^2.0.0"`) and add the package (`"@petalbot-plugin/chat":
+`petalbot.dependencies` (`"chat": "^3.0.0"`) and add the package (`"@petalbot-plugin/chat":
 "workspace:*"`), then import its contract from `@petalbot-plugin/chat/contract`:
 
 ```ts
@@ -618,37 +620,37 @@ export default definePlugin(greeterContract, {
   `connections`) and returns one result per connection; one failure blocks no other.
 - **`chat.beforeSend`** lets a plugin rewrite or veto every outgoing message (send, reply,
   broadcast), e.g. a filter: `ctx.hook('chat.beforeSend', (input, { veto }) => ...)`.
-  `input.caller` says who sends: a plugin id, or `client` for the panel.
+  `input.actor` says who caused the send: a panel user, a viewer (through a flow) or a plugin.
+- **Timeouts are the domain's business.** `chat.send`, `chat.reply` and `chat.broadcast` declare
+  15 s in their contract (a send may wait in the platform's rate limiter), so callers pass no
+  `timeoutMs`.
 - **`chat.connections()`** lists the connections and what each can do (`capabilities`).
 - **Stream events** carry `source` like chat messages; an event a platform doesn't have is never
   emitted for it.
 
 ### Writing a platform plugin
 
-A platform plugin lists `chat` and/or `stream` as **required** dependencies (an optional one is
-not restarted with the domain, so its connections would be lost for good when the domain
-reloads) and does three things per connection:
+A platform plugin depends on `chat` and/or `stream` (usually as **required** dependencies: it does
+nothing useful without them) and **provides** one registration per connection. The key is the
+connection id, `<platform>:<channel>`; the domain reads the platform from it.
 
 ```ts
-const id = `twitch:${login}`; // <platform>:<channel>
-// 1. Provide: the domain calls these. Every method is optional.
-ctx.provide('chat.platform', id, {
-  send: async ({ text }) => {
-    const result = await limiter.schedule(() => api.send(text));
-    if (!result.ok) return result; // slot explicitly selects rateLimitedFailure
-    return toDomainSendResult(result.value); // map platform response to domain definitions
+const conn = ctx.provide('chat.platform', `twitch:${login}`, {
+  // What the domain shows and resolves targets with; required because the slot declares it.
+  info: { channel: login, displayName, isDefault: true },
+  // The domain calls these. Every method is optional.
+  methods: {
+    send: async ({ text }) => {
+      const result = await limiter.schedule(() => api.send(text));
+      if (!result.ok) return result; // slot explicitly selects rateLimitedFailure
+      return toDomainSendResult(result.value); // map platform response to domain definitions
+    },
   },
 });
-// 2. Announce the connection; only the plugin providing `id` may.
-await ctx.call('chat.registerConnection', {
-  id,
-  platform: 'twitch',
-  channel: login,
-  displayName,
-  isDefault: true,
-});
-// 3. Feed inbound messages; the domain emits chat.message.
-await ctx.call('chat.ingest', { id: msg.id, source: { platform: 'twitch', connection: id }, ... });
+// Inbound: the domain adds `source` from the key and emits chat.message.
+conn.push('message', { id: msg.id, user, text, timestamp, fromBot });
+// Info changed (e.g. another connection became the default):
+conn.update({ channel: login, displayName, isDefault: false });
 ```
 
 - **Provider failures belong to the domain.** Import its failure definitions and use
@@ -656,43 +658,60 @@ await ctx.call('chat.ingest', { id: msg.id, source: { platform: 'twitch', connec
   slot. Helix send rate-limit drops map to SDK `rateLimitedFailure`, other send drops to
   `messageRejected`, permission refusals to `permissionDenied`, identifiable missing messages
   to `messageNotFound` (reply/delete), identifiable missing users to `userNotFound` (timeout),
-  and other request failures to `providerError`. Unexpected exceptions are logged and mapped
-  to the same declared `providerError` by the domain. These are the M5c mapping rules; no
-  Twitch implementation is included yet.
+  and other request failures to `providerError`. Unexpected exceptions, and methods that take
+  longer than their timeout (12 s for `send`/`reply`), are logged and mapped to the same declared
+  `providerError` by the domain.
 - **Rate limiting lives in the provider** (`createRateLimiter`, one per connection), not in the
   domain. `rate-limited` always means "not sent".
 - **Own the reply fallback.** Without native replies, mention the author in the platform's own
   syntax and answer `delivery: 'mention'`; the domain never rewrites text.
-- **Set `fromBot`** on messages written by the bot's account. `chat.ingest` drops a message id
-  it already has for that connection, so redelivered messages are harmless.
-- **Connections end with their provider.** Disposing the provider, or stopping the plugin,
-  removes the connection; after providing it again, register it again. Re-registering replaces
-  the info (e.g. a new `isDefault`).
-- **`stream` works the same way:** provide `stream.platform` (no methods yet, it ties the
-  connection to your plugin), call `stream.registerConnection` (with `live`/`since` if the stream
-  is already running, also when registering again) and `stream.ingest({ type: 'follow', source, user })`.
+- **Set `fromBot`** on messages written by the bot's account. The domain drops a message id it
+  already has for that connection, so redelivered messages are harmless.
+- **Pushes are validated at once.** A malformed payload throws `ValidationError` in your plugin;
+  the domain never sees it. Pushes arrive at the domain in the order you made them.
+- **Connections live as long as their provider.** Disposing it (`conn.dispose()`), or stopping the
+  plugin, removes the connection. A restart of the domain keeps it: there is nothing to register
+  again.
+- **`stream` works the same way:** `ctx.provide('stream.platform', key, { info: { channel,
+  displayName, live?, since? } })` and `conn.push('event', { type: 'follow', user })`. The domain
+  doesn't de-duplicate stream events; the platform must.
 
 ### Owning a provider slot
 
-A domain author resolves its slot with `ctx.providers('chat.platform')`: `keys()`, `get(key)`
-(a handle whose `call` validates input and output) and `onChange(fn)`, which reports every
-provider that comes or goes after subscribing (no replay: `keys()` lists the current ones). Check `handle.pluginId` against the RPC's `caller` before accepting
-anything on a connection's behalf, and check `handle.has(method)` before running hooks for an
-operation the provider can't do.
+A domain declares its slot in the contract with up to four parts: `key` (a string schema for the
+keys), `info` (an object schema providers register with), `methods` (domain -> provider, each may
+declare `timeoutMs`; default 5 s) and `inbound` (provider -> domain, by name).
+
+It resolves the slot with `ctx.providers('chat.platform')`:
+
+- `list()` and `get(key)` give handles: `key`, `pluginId`, `info`, `methods`, `has(method)` and
+  `call(method, input)`, which validates input and output and applies the method's timeout.
+- `on(name, (payload, provider) => ...)` handles one kind of push. A plugin's handlers of one slot
+  run one at a time, in push order; pushes while the domain isn't running are dropped.
+- `onChange(fn)` reports every provider that comes, updates its info or goes (`added`,
+  `updated`, `removed`), with no replay: read `list()` at setup.
+
+Ownership needs no checks: a plugin can only push through its own registration, so build
+`source` from `provider.key` (`sourceOf(key)` from `@petalbot/sdk`). Check `handle.has(method)`
+before running hooks for an operation the provider can't do.
 
 ### Testing
 
 - **Consumers** fake the domain's RPCs and emit its events:
   `createTestHarness(greeter, { fakes: { chat: { rpc: { reply: async () => ({ ok: true, messageId: 'r1', delivery: 'native' }) } } } })`,
   then `harness.emit('chat.message', message)`.
-- **Platform plugins** fake `registerConnection` and `ingest` to record what arrives, and call
-  their own provider the way the domain would: `harness.provider('chat.platform', 'twitch:roman')`.
-- **Domains** get fake providers: `providers: { 'chat.platform': { 'twitch:test': fake } }`, and
-  `harness.addProvider(...)` mid-test. They come from the same harness plugin as `harness.call`,
-  so the test may register those connections and ingest for them (see `plugins/chat/test`).
+- **Platform plugins** read what they pushed with `harness.pushed('chat.platform', 'twitch:roman')`
+  (after `await harness.idle()`), and call their own provider the way the domain would:
+  `harness.provider('chat.platform', 'twitch:roman')`.
+- **Domains** get fake providers: `providers: { 'chat.platform': { 'twitch:test': { info, methods } } }`,
+  or mid-test `const conn = harness.addProvider(slot, key, { info, methods })`, which returns the
+  handle to `push`, `update` and `dispose` with (see `plugins/chat/test`).
 
 ## 13. Glossary
 
+- **Actor:** who caused a call or an event: a panel user, an overlay, a plugin, a chat viewer or a
+  flow. RPC implementations get it as `actor` (`who` is its display label); it travels along
+  nested calls and the events they emit.
 - **Caller:** who called an RPC: a plugin id, or `'client'` for the panel and overlays. RPC
   implementations get it with `client` and `who` (section 4).
 - **Choice:** a string field (`choice('<plugin>.<rpc>')`) whose valid values an RPC lists at

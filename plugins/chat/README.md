@@ -98,4 +98,4 @@ that same `providerError` at the bridge. Rate limiting and reply fallback remain
 
 The panel explicitly presents vetoes and stale connections with contextual copy and retains the
 draft on failure; other variants use category fallbacks. Diagnostics are never automatic UI copy.
-Chat is contract/package `2.0.0`, targeting `petalbot.apiVersion: 2`.
+Chat is contract/package `3.0.0`, targeting `petalbot.apiVersion: 3`.
