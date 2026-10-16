@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
-import { Result, defineContract, definePlugin, fail, ok } from '@petalbot/sdk';
+import { Result, defineFailure, defineContract, definePlugin, fail, ok } from '@petalbot/sdk';
 import { createTestHarness } from '../src/harness.ts';
 
 const pointsContract = defineContract({
@@ -196,6 +196,12 @@ describe('createTestHarness secrets and URLs', () => {
   });
 });
 
+const providerNotFound = defineFailure({
+  code: 'provider-not-found',
+  reason: 'not-found',
+  details: z.object({ key: z.string() }),
+});
+
 const sinkContract = defineContract({
   id: 'sink',
   version: '1.0.0',
@@ -209,7 +215,7 @@ const sinkContract = defineContract({
     keysAtStart: { kind: 'query', output: z.array(z.string()) },
     write: {
       input: z.object({ key: z.string(), text: z.string() }),
-      output: Result(z.object({ id: z.string() })),
+      output: Result(z.object({ id: z.string() }), [providerNotFound]),
     },
   },
 });
@@ -223,7 +229,7 @@ const sink = definePlugin(sinkContract, {
         keysAtStart: () => atStart,
         write: async ({ key, text }) => {
           const provider = ctx.providers('sink.target').get(key);
-          if (!provider) return fail('not-found', `No ${key}`);
+          if (!provider) return fail(providerNotFound, { key }, `No ${key}`);
           return ok(await provider.call('write', { text }));
         },
       },

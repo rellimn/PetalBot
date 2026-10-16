@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import { defineContract } from '../src/contract.ts';
-import { Result } from '../src/result.ts';
+import { Result, defineFailure } from '../src/result.ts';
+
+export const sendDenied = defineFailure({
+  code: 'send-denied',
+  reason: 'forbidden',
+  details: z.object({}),
+});
 
 export const chatContract = defineContract({
   id: 'chat',
@@ -14,7 +20,7 @@ export const chatContract = defineContract({
   rpc: {
     send: {
       input: z.object({ text: z.string() }),
-      output: Result(z.object({ messageId: z.string() })),
+      output: Result(z.object({ messageId: z.string() }), [sendDenied]),
     },
   },
   providers: {

@@ -13,7 +13,7 @@
   },
   "petalbot": {
     "id": "stream",
-    "apiVersion": 1
+    "apiVersion": 2
   },
   "dependencies": {
     "@petalbot/sdk": "workspace:*",

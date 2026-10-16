@@ -21,15 +21,23 @@ import {
   definePanel,
   type WidgetProps,
 } from '@petalbot/ui-sdk';
+import { presentCounterFailure } from './failure.ts';
 import { api } from './client.ts';
 import { counterContract, type Counter } from './contract.ts';
 import styles from './panel.module.css';
 
 /** One counter with its actions. Mutations raise their own toasts on failure. */
 function CounterRow({ counter }: { readonly counter: Counter }) {
-  const increment = api.counter.increment.useMutation({ error: 'Could not count' });
-  const reset = api.counter.reset.useMutation({ error: 'Could not reset' });
+  const increment = api.counter.increment.useMutation({
+    error: 'Could not count',
+    presentFailure: presentCounterFailure,
+  });
+  const reset = api.counter.reset.useMutation({
+    error: 'Could not reset',
+    presentFailure: presentCounterFailure,
+  });
   const remove = api.counter.remove.useMutation({
+    presentFailure: presentCounterFailure,
     success: `Removed ${counter.name}`,
     error: 'Could not remove',
   });
@@ -136,7 +144,10 @@ function CountersPage() {
  */
 function CounterWidget({ config }: WidgetProps<typeof counterContract, 'value'>) {
   const counter = api.counter.get.useQuery({ counter: config.counter });
-  const increment = api.counter.increment.useMutation({ error: 'Could not count' });
+  const increment = api.counter.increment.useMutation({
+    error: 'Could not count',
+    presentFailure: presentCounterFailure,
+  });
   if (counter.isPending) return <Spinner label="Loading the counter" />;
   // null, not an error: the counter was deleted after this widget was placed.
   if (counter.data === null || counter.data === undefined) {

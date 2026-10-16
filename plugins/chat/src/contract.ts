@@ -10,7 +10,7 @@
  * Guide: docs/plugin-guide.md#12-platforms-and-providers.
  */
 import { z } from 'zod';
-import { Result, defineContract } from '@petalbot/sdk';
+import { Result, defineContract, defineFailure, rateLimitedFailure } from '@petalbot/sdk';
 
 /** `twitch`, `youtube`, ...: open, so a new platform changes no union. */
 export const PlatformId = z.string().regex(/^[a-z][a-z0-9-]*$/);
@@ -89,17 +89,112 @@ export type ConnectionInfo = z.output<typeof ConnectionInfo>;
 /** Message text: trimmed, never empty. Platforms reject what is too long for them. */
 const Text = z.string().trim().min(1);
 
+/** Domain-owned failures: provider implementers import these definitions. */
+export const connectionNotFound = defineFailure({
+  code: 'connection-not-found',
+  reason: 'not-found',
+  details: z.object({ connection: ConnectionId }),
+});
+export const platformNotConnected = defineFailure({
+  code: 'platform-not-connected',
+  reason: 'not-found',
+  details: z.object({ platform: PlatformId }),
+});
+export const ambiguousTarget = defineFailure({
+  code: 'ambiguous-target',
+  reason: 'custom',
+  details: z.object({ platform: PlatformId, connections: z.array(ConnectionId).min(2) }),
+});
+export const unsupportedCapability = defineFailure({
+  code: 'unsupported-capability',
+  reason: 'unsupported',
+  details: z.object({ connection: ConnectionId, capability: Capability }),
+});
+export const sendVetoed = defineFailure({
+  code: 'send-vetoed',
+  reason: 'forbidden',
+  details: z.object({ connection: ConnectionId, vetoedBy: z.string() }),
+});
+export const providerError = defineFailure({
+  code: 'provider-error',
+  reason: 'platform-error',
+  details: z.object({ connection: ConnectionId, capability: Capability }),
+});
+export const permissionDenied = defineFailure({
+  code: 'permission-denied',
+  reason: 'forbidden',
+  details: z.object({}),
+});
+export const messageRejected = defineFailure({
+  code: 'message-rejected',
+  reason: 'platform-error',
+  details: z.object({}),
+});
+export const messageNotFound = defineFailure({
+  code: 'message-not-found',
+  reason: 'not-found',
+  details: z.object({ messageId: z.string().min(1) }),
+});
+export const userNotFound = defineFailure({
+  code: 'user-not-found',
+  reason: 'not-found',
+  details: z.object({ userId: z.string().min(1) }),
+});
+
+const resolutionFailures = [connectionNotFound, platformNotConnected, ambiguousTarget] as const;
+const sendingFailures = [
+  permissionDenied,
+  rateLimitedFailure,
+  messageRejected,
+  providerError,
+] as const;
+const replyingFailures = [...sendingFailures, messageNotFound] as const;
+const deletingFailures = [permissionDenied, messageNotFound, providerError] as const;
+const timeoutFailures = [permissionDenied, userNotFound, providerError] as const;
 const Sent = z.object({ messageId: z.string() });
-const SendResult = Result(Sent);
-const ReplyResult = Result(Sent.extend({ delivery: z.enum(['native', 'mention']) }));
-const Done = Result(z.object({}));
+const Replied = Sent.extend({ delivery: z.enum(['native', 'mention']) });
+
+export const ProviderSendResult = Result(Sent, sendingFailures);
+export const ProviderReplyResult = Result(Replied, replyingFailures);
+export const ProviderDeleteResult = Result(z.object({}), deletingFailures);
+export const ProviderTimeoutResult = Result(z.object({}), timeoutFailures);
+export const SendResult = Result(Sent, [
+  ...resolutionFailures,
+  unsupportedCapability,
+  sendVetoed,
+  ...sendingFailures,
+]);
+export type SendResult = z.output<typeof SendResult>;
+export const ReplyResult = Result(Replied, [
+  connectionNotFound,
+  unsupportedCapability,
+  sendVetoed,
+  ...replyingFailures,
+]);
+export const BroadcastItemResult = Result(Sent, [
+  connectionNotFound,
+  unsupportedCapability,
+  sendVetoed,
+  ...sendingFailures,
+]);
+export type BroadcastItemResult = z.output<typeof BroadcastItemResult>;
+export const DeleteResult = Result(z.object({}), [
+  ...resolutionFailures,
+  unsupportedCapability,
+  ...deletingFailures,
+]);
+export const TimeoutResult = Result(z.object({}), [
+  ...resolutionFailures,
+  unsupportedCapability,
+  ...timeoutFailures,
+]);
 
 /** The message a reply answers: a whole `ChatMessage` fits. */
 const ReplyTarget = z.object({ id: z.string().min(1), source: Source, user: ChatUser });
 
 export const chatContract = defineContract({
   id: 'chat',
-  version: '1.0.0',
+  version: '2.0.0',
 
   events: {
     message: { schema: ChatMessage, expose: ['panel'] },
@@ -142,9 +237,12 @@ export const chatContract = defineContract({
         platforms: z.array(PlatformId).optional(),
         connections: z.array(ConnectionId).optional(),
       }),
-      output: z.record(ConnectionId, SendResult),
+      output: z.record(ConnectionId, BroadcastItemResult),
     },
-    delete: { input: z.object({ target: Target, messageId: z.string().min(1) }), output: Done },
+    delete: {
+      input: z.object({ target: Target, messageId: z.string().min(1) }),
+      output: DeleteResult,
+    },
     timeout: {
       input: z.object({
         target: Target,
@@ -152,7 +250,7 @@ export const chatContract = defineContract({
         seconds: z.number().int().min(1),
         reason: z.string().max(500).optional(),
       }),
-      output: Done,
+      output: TimeoutResult,
     },
     connections: { kind: 'query', output: z.array(ConnectionInfo), expose: { panel: 'mod' } },
     /** The last 50 messages since chat started, oldest first. */
@@ -170,20 +268,20 @@ export const chatContract = defineContract({
   providers: {
     /** One provider per connection, keyed by its id. Every method is optional. */
     platform: {
-      send: { input: z.object({ text: z.string() }), output: SendResult },
+      send: { input: z.object({ text: z.string() }), output: ProviderSendResult },
       /** The platform owns the fallback: mention syntax differs per platform. */
       reply: {
         input: z.object({ to: z.object({ id: z.string(), user: ChatUser }), text: z.string() }),
-        output: ReplyResult,
+        output: ProviderReplyResult,
       },
-      delete: { input: z.object({ messageId: z.string() }), output: Done },
+      delete: { input: z.object({ messageId: z.string() }), output: ProviderDeleteResult },
       timeout: {
         input: z.object({
           userId: z.string(),
           seconds: z.number().int(),
           reason: z.string().optional(),
         }),
-        output: Done,
+        output: ProviderTimeoutResult,
       },
     },
   },

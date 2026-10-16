@@ -1,6 +1,6 @@
 {
   "name": "@petalbot-plugin/chat",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -13,7 +13,7 @@
   },
   "petalbot": {
     "id": "chat",
-    "apiVersion": 1
+    "apiVersion": 2
   },
   "dependencies": {
     "@petalbot/sdk": "workspace:*",

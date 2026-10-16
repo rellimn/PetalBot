@@ -9,7 +9,7 @@
  * Read next: src/db/schema.ts.
  */
 import { z } from 'zod';
-import { Choices, Result, choice, defineContract } from '@petalbot/sdk';
+import { Choices, Result, defineFailure, choice, defineContract } from '@petalbot/sdk';
 
 /**
  * One counter, as clients see it.
@@ -29,10 +29,16 @@ export type Counter = z.output<typeof Counter>;
 /** The input of every RPC that acts on one counter. */
 const CounterRef = z.object({ counter: z.string().min(1).max(64) });
 
+export const counterNotFound = defineFailure({
+  code: 'counter-not-found',
+  reason: 'not-found',
+  details: z.object({ counterId: z.string() }),
+});
+
 export const counterContract = defineContract({
   id: 'counter',
   // Must equal the package.json version. A breaking change to this contract is a major bump.
-  version: '3.0.0',
+  version: '4.0.0',
 
   // Settings live in the contract, so the panel and the tests see their type. Give every field
   // a default: a fresh install starts without any stored settings.
@@ -70,12 +76,12 @@ export const counterContract = defineContract({
     // Result: "not found" is an expected outcome the caller handles, not a crash.
     increment: {
       input: CounterRef,
-      output: Result(z.object({ counter: Counter })),
+      output: Result(z.object({ counter: Counter }), [counterNotFound]),
       expose: { panel: 'mod' },
     },
     reset: {
       input: CounterRef,
-      output: Result(z.object({ counter: Counter })),
+      output: Result(z.object({ counter: Counter }), [counterNotFound]),
       expose: { panel: 'mod' },
     },
     create: {
@@ -83,7 +89,11 @@ export const counterContract = defineContract({
       output: Counter,
       expose: { panel: 'owner' },
     },
-    remove: { input: CounterRef, output: Result(z.object({})), expose: { panel: 'owner' } },
+    remove: {
+      input: CounterRef,
+      output: Result(z.object({}), [counterNotFound]),
+      expose: { panel: 'owner' },
+    },
   },
 
   widgets: {

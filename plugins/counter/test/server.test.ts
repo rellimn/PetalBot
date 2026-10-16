@@ -69,7 +69,12 @@ describe('counter plugin', () => {
 
   it('answers not-found for unknown counters instead of throwing', async () => {
     const harness = await start();
-    const notFound = { ok: false, reason: 'not-found', message: 'There is no counter "nope"' };
+    const notFound = {
+      ok: false,
+      reason: 'not-found',
+      error: { code: 'counter-not-found', counterId: 'nope' },
+      message: 'There is no counter "nope"',
+    };
     await expect(harness.call('counter.increment', { counter: 'nope' })).resolves.toEqual(notFound);
     await expect(harness.call('counter.reset', { counter: 'nope' })).resolves.toEqual(notFound);
     await expect(harness.call('counter.remove', { counter: 'nope' })).resolves.toEqual(notFound);

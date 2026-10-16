@@ -1,9 +1,13 @@
-/** What `schedule` resolves to when the task was not attempted. */
-export interface RateLimited {
-  readonly ok: false;
-  readonly reason: 'rate-limited';
-  readonly message: string;
-}
+import { z } from 'zod';
+import { defineFailure, fail } from './result.ts';
+
+/** The task was not attempted; operations must opt into this failure explicitly. */
+export const rateLimitedFailure = defineFailure({
+  code: 'rate-limited',
+  reason: 'rate-limited',
+  details: z.object({}),
+});
+export type RateLimited = z.output<typeof rateLimitedFailure.schema>;
 
 export type Scheduled<T> = { readonly ok: true; readonly value: T } | RateLimited;
 
@@ -49,7 +53,7 @@ interface Waiting {
   readonly deadline: number;
 }
 
-const limited = (message: string): RateLimited => ({ ok: false, reason: 'rate-limited', message });
+const limited = (message: string): RateLimited => fail(rateLimitedFailure, {}, message);
 
 function checkLimit(limit: number): void {
   if (!Number.isInteger(limit) || limit < 1) {

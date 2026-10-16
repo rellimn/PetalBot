@@ -40,6 +40,27 @@ describe('Counters page', () => {
     expect(server.calls('counter.list')).toHaveLength(1);
   });
 
+  it('presents a disappeared counter without diagnostic text', async () => {
+    const { server } = renderPluginUi(<CountersPage />);
+    await waitFor(() => {
+      expect(server.calls('counter.list')).toHaveLength(1);
+    });
+    act(() => {
+      server.answer('counter.list', [deaths]);
+    });
+    await userEvent.click(await screen.findByRole('button', { name: '+1 Deaths' }));
+    act(() => {
+      server.answer('counter.increment', {
+        ok: false,
+        reason: 'not-found',
+        error: { code: 'counter-not-found', counterId: 'a' },
+        message: 'DIAGNOSTIC_ONLY',
+      });
+    });
+    expect(await screen.findByText('This counter no longer exists.')).toBeTruthy();
+    expect(screen.queryByText('DIAGNOSTIC_ONLY')).toBeNull();
+  });
+
   it('creates counters and shows why a name is refused', async () => {
     const { server } = renderPluginUi(<CountersPage />);
     await waitFor(() => {

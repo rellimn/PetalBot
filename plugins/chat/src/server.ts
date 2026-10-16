@@ -7,18 +7,25 @@
  *
  * Guide: docs/plugin-guide.md#12-platforms-and-providers.
  */
+import type { z } from 'zod';
 import {
   AccessError,
   UnsupportedCapabilityError,
   ValidationError,
   definePlugin,
   fail,
-  type Failure,
   type ProviderHandle,
 } from '@petalbot/sdk';
 import {
   Capability,
   chatContract,
+  connectionNotFound,
+  platformNotConnected,
+  ambiguousTarget,
+  unsupportedCapability,
+  sendVetoed,
+  providerError,
+  type BroadcastItemResult,
   type ConnectionInfo,
   type RecentMessage,
   type Source,
@@ -60,23 +67,27 @@ export default definePlugin(chatContract, {
     };
     const live = (): Live[] => [...registered.keys()].flatMap((id) => liveOne(id) ?? []);
 
-    const resolve = (target: Target): Live | Failure => {
-      if ('connection' in target) {
-        return (
-          liveOne(target.connection) ??
-          fail('not-found', `There is no chat connection "${target.connection}"`)
-        );
-      }
+    const resolveConnection = (id: string): Live | z.input<typeof connectionNotFound.schema> =>
+      liveOne(id) ??
+      fail(connectionNotFound, { connection: id }, `There is no chat connection "${id}"`);
+
+    const resolve = (target: Target) => {
+      if ('connection' in target) return resolveConnection(target.connection);
       const candidates = live().filter(({ info }) => info.platform === target.platform);
       const chosen =
         candidates.find(({ info }) => info.isDefault) ??
         (candidates.length === 1 ? candidates[0] : undefined);
       if (chosen) return chosen;
+      if (candidates.length === 0)
+        return fail(
+          platformNotConnected,
+          { platform: target.platform },
+          `No ${target.platform} chat is connected`,
+        );
       return fail(
-        'not-found',
-        candidates.length === 0
-          ? `No ${target.platform} chat is connected`
-          : `Several ${target.platform} chats are connected and none is the default`,
+        ambiguousTarget,
+        { platform: target.platform, connections: candidates.map(({ info }) => info.id) },
+        `Several ${target.platform} chats are connected and none is the default`,
       );
     };
 
@@ -90,27 +101,37 @@ export default definePlugin(chatContract, {
       }
     };
 
-    const unsupported = (connection: Live, what: string): Failure =>
-      fail('unsupported', `${connection.info.displayName} (${connection.info.id}) cannot ${what}`);
+    const unsupported = (connection: Live, capability: Capability, what: string) =>
+      fail(
+        unsupportedCapability,
+        { connection: connection.info.id, capability },
+        `${connection.info.displayName} (${connection.info.id}) cannot ${what}`,
+      );
 
     /** Calls the provider; a throwing provider is a `platform-error`, logged. */
     const attempt = async <T>(
       connection: Live,
       method: Capability,
       run: () => Promise<T>,
-    ): Promise<T | Failure> => {
+    ): Promise<
+      T | z.input<typeof unsupportedCapability.schema> | z.input<typeof providerError.schema>
+    > => {
       try {
         return await run();
       } catch (error) {
         if (error instanceof UnsupportedCapabilityError) {
-          return unsupported(connection, method);
+          return unsupported(connection, method, method);
         }
         ctx.log.error('Chat provider failed', {
           connection: connection.info.id,
           method,
           error: errorText(error),
         });
-        return fail('platform-error', `${connection.info.id}: ${errorText(error)}`);
+        return fail(
+          providerError,
+          { connection: connection.info.id, capability: method },
+          `${connection.info.id}: ${errorText(error)}`,
+        );
       }
     };
 
@@ -120,7 +141,9 @@ export default definePlugin(chatContract, {
       text: string,
       caller: string,
       replyTo?: string,
-    ): Promise<{ readonly ok: true; readonly text: string } | Failure> => {
+    ): Promise<
+      { readonly ok: true; readonly text: string } | z.input<typeof sendVetoed.schema>
+    > => {
       const result = await ctx.runHook('chat.beforeSend', {
         connection: connection.info.id,
         text,
@@ -128,13 +151,17 @@ export default definePlugin(chatContract, {
         ...(replyTo === undefined ? {} : { replyTo }),
       });
       return result.vetoed
-        ? fail('forbidden', `Vetoed by ${result.vetoedBy}: ${result.reason}`)
+        ? fail(
+            sendVetoed,
+            { connection: connection.info.id, vetoedBy: result.vetoedBy },
+            `Vetoed by ${result.vetoedBy}: ${result.reason}`,
+          )
         : { ok: true, text: result.value.text };
     };
 
     const send = async (connection: Live, text: string, caller: string) => {
       // Before the hook: taps never see a message that can't be sent anyway.
-      if (!connection.provider.has('send')) return unsupported(connection, 'send messages');
+      if (!connection.provider.has('send')) return unsupported(connection, 'send', 'send messages');
       const checked = await beforeSend(connection, text, caller);
       if (!checked.ok) return checked;
       return attempt(connection, 'send', () =>
@@ -150,9 +177,9 @@ export default definePlugin(chatContract, {
         },
 
         reply: async ({ to, text }, { caller }) => {
-          const connection = resolve({ connection: to.source.connection });
+          const connection = resolveConnection(to.source.connection);
           if (!('provider' in connection)) return connection;
-          if (!connection.provider.has('reply')) return unsupported(connection, 'reply');
+          if (!connection.provider.has('reply')) return unsupported(connection, 'reply', 'reply');
           const checked = await beforeSend(connection, text, caller, to.id);
           if (!checked.ok) return checked;
           return attempt(connection, 'reply', () =>
@@ -172,24 +199,25 @@ export default definePlugin(chatContract, {
           // Every requested connection gets an answer, also one that is not there.
           const missing = (connections ?? [])
             .filter((id) => liveOne(id) === undefined)
-            .map((id) => [id, fail('not-found', `There is no chat connection "${id}"`)]);
+            .map((id): [string, BroadcastItemResult] => [
+              id,
+              fail(connectionNotFound, { connection: id }, `There is no chat connection "${id}"`),
+            ]);
           // In parallel: a slow or failing platform delays or blocks no other.
           const results = await Promise.all(
-            chosen.map(async (connection) => [
+            chosen.map(async (connection): Promise<[string, BroadcastItemResult]> => [
               connection.info.id,
               await send(connection, text, caller),
             ]),
           );
-          return Object.fromEntries([...results, ...missing]) as Record<
-            string,
-            Awaited<ReturnType<typeof send>>
-          >;
+          return Object.fromEntries([...results, ...missing]);
         },
 
         delete: async ({ target, messageId }) => {
           const connection = resolve(target);
           if (!('provider' in connection)) return connection;
-          if (!connection.provider.has('delete')) return unsupported(connection, 'delete messages');
+          if (!connection.provider.has('delete'))
+            return unsupported(connection, 'delete', 'delete messages');
           return attempt(connection, 'delete', () =>
             connection.provider.call('delete', { messageId }),
           );
@@ -198,7 +226,8 @@ export default definePlugin(chatContract, {
         timeout: async ({ target, userId, seconds, reason }) => {
           const connection = resolve(target);
           if (!('provider' in connection)) return connection;
-          if (!connection.provider.has('timeout')) return unsupported(connection, 'time out users');
+          if (!connection.provider.has('timeout'))
+            return unsupported(connection, 'timeout', 'time out users');
           return attempt(connection, 'timeout', () =>
             connection.provider.call('timeout', {
               userId,

@@ -3,9 +3,14 @@ import { describe, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
 import { defineContract } from '../src/contract.ts';
 import { definePlugin, type RpcMeta } from '../src/plugin.ts';
-import { Result, fail, ok } from '../src/result.ts';
+import { Result, defineFailure, fail, ok } from '../src/result.ts';
 import { bareContract } from './fixtures.ts';
 
+const counterNotFound = defineFailure({
+  code: 'counter-not-found',
+  reason: 'not-found',
+  details: z.object({ counterId: z.string() }),
+});
 const Counter = z.object({ id: z.string(), value: z.number().int() });
 const counter = defineContract({
   id: 'counter',
@@ -15,7 +20,7 @@ const counter = defineContract({
     list: { output: z.array(Counter) },
     increment: {
       input: z.object({ counter: z.string() }),
-      output: Result(z.object({ counter: Counter })),
+      output: Result(z.object({ counter: Counter }), [counterNotFound]),
     },
   },
 });
@@ -34,7 +39,9 @@ describe('setup returns the RPC implementations', () => {
             },
             increment: ({ counter: id }, { who }) => {
               expectTypeOf(who).toEqualTypeOf<string>();
-              return id === '' ? fail('not-found', 'no') : ok({ counter: { id, value: 1 } });
+              return id === ''
+                ? fail(counterNotFound, { counterId: id }, 'no')
+                : ok({ counter: { id, value: 1 } });
             },
           },
         };

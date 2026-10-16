@@ -1,12 +1,18 @@
+import { userEvent } from '@testing-library/user-event';
 import { act, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { codecs, defineContract } from '@petalbot/sdk';
+import { codecs, defineContract, defineFailure, Result } from '@petalbot/sdk';
 import { ClientError } from '../src/client/errors.ts';
 import { createPluginClient } from '../src/client/plugin-client.ts';
 import { renderWithPetal } from './render.tsx';
 
+const late = defineFailure({
+  code: 'late',
+  reason: 'custom',
+  details: z.object({ at: codecs.isoDate() }),
+});
 const schedule = defineContract({
   id: 'schedule',
   version: '1.0.0',
@@ -14,6 +20,7 @@ const schedule = defineContract({
     moved: { schema: z.object({ at: codecs.isoDate() }), expose: ['panel'] },
   },
   rpc: {
+    book: { output: Result(z.object({}), [late]), expose: { panel: 'mod' } },
     next: {
       kind: 'query',
       input: z.object({}),
@@ -113,4 +120,62 @@ describe('decoding what the server sends', () => {
     expect(await screen.findByText('live: 2026-10-13T08:00:00.000Z')).toBeTruthy();
     expect(socket.ofType('rpc')).toHaveLength(1);
   });
+});
+
+function Book({
+  presenter,
+}: {
+  readonly presenter: (failure: z.output<typeof late.schema>) => string;
+}) {
+  const mutation = client.schedule.book.useMutation({
+    error: 'Could not book',
+    presentFailure: presenter,
+  });
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => {
+          mutation.mutate();
+        }}
+      >
+        Book
+      </button>
+      <p>
+        {mutation.error?.code ??
+          (mutation.data?.ok === false ? mutation.data.error.at.toISOString() : 'waiting')}
+      </p>
+    </>
+  );
+}
+
+describe('failure codecs on the browser boundary', () => {
+  it.each(['valid', 'date', 'code'] as const)(
+    'decodes only the declared valid payload (%s)',
+    async (mode) => {
+      const presenter = vi.fn(() => 'Too late');
+      const { socket } = renderWithPetal(<Book presenter={presenter} />);
+      await userEvent.click(screen.getByRole('button', { name: 'Book' }));
+      act(() => {
+        socket.answer('rpc', {
+          ok: false,
+          reason: 'custom',
+          error: {
+            code: mode === 'code' ? 'foreign' : 'late',
+            at: mode === 'date' ? 'invalid' : '2026-10-16T10:00:00.000Z',
+          },
+        });
+      });
+      expect(
+        await screen.findByText(mode === 'valid' ? '2026-10-16T10:00:00.000Z' : 'validation'),
+      ).toBeTruthy();
+      if (mode === 'valid')
+        expect(presenter).toHaveBeenCalledExactlyOnceWith({
+          ok: false,
+          reason: 'custom',
+          error: { code: 'late', at: new Date('2026-10-16T10:00:00.000Z') },
+        });
+      else expect(presenter).not.toHaveBeenCalled();
+    },
+  );
 });

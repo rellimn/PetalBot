@@ -1,7 +1,7 @@
 import semver from 'semver';
 import { z } from 'zod';
 
-export const SUPPORTED_API_VERSIONS: readonly number[] = [1];
+export const SUPPORTED_API_VERSIONS: readonly number[] = [2];
 /** Ids that would collide with core names (`petalbot_*` tables, the `core` namespace). */
 export const RESERVED_IDS: readonly string[] = ['core', 'petalbot'];
 

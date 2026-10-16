@@ -112,10 +112,34 @@ describe('Chat widget', () => {
       server.answer('chat.send', {
         ok: false,
         reason: 'forbidden',
+        error: { code: 'send-vetoed', connection: 'twitch:roman', vetoedBy: 'filter' },
         message: 'Vetoed by filter: no links',
       });
     });
-    expect(await screen.findByText('Vetoed by filter: no links')).toBeTruthy();
+    expect(await screen.findByText('Message blocked by a chat rule.')).toBeTruthy();
+    expect(screen.queryByText('Vetoed by filter: no links')).toBeNull();
+    expect(box.value).toBe('hello');
+  });
+
+  it('explains a connection disappearing while retaining the draft', async () => {
+    const server = await show([], [connection()]);
+    const box = await screen.findByLabelText<HTMLInputElement>('Message');
+    await userEvent.type(box, 'hello');
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+    act(() => {
+      server.answer('chat.send', {
+        ok: false,
+        reason: 'not-found',
+        error: { code: 'connection-not-found', connection: 'twitch:roman' },
+        message: 'DIAGNOSTIC_ONLY',
+      });
+    });
+    expect(
+      await screen.findByText(
+        'This chat connection is no longer available. Choose another connection.',
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText('DIAGNOSTIC_ONLY')).toBeNull();
     expect(box.value).toBe('hello');
   });
 

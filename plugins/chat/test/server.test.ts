@@ -5,11 +5,11 @@
  * the harness is "the platform" here: it may register its connections and ingest messages.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { AccessError, ValidationError, type ProviderImpl } from '@petalbot/sdk';
+import { AccessError, ValidationError, fail, type ProviderImpl } from '@petalbot/sdk';
 import { createTestHarness } from '@petalbot/testing';
 import chat from '../src/server.ts';
 import { RECENT_LIMIT } from '../src/limits.ts';
-import type { chatContract } from '../src/contract.ts';
+import { permissionDenied, type chatContract } from '../src/contract.ts';
 import { message, recordingLogger, startPlatform, startTap, twitch, viewer } from './fixtures.ts';
 
 type Fake = ProviderImpl<typeof chatContract.providers.platform>;
@@ -83,6 +83,7 @@ describe('chat connections', () => {
     ).resolves.toEqual({
       ok: false,
       reason: 'not-found',
+      error: { code: 'connection-not-found', connection: 'twitch:other' },
       message: 'There is no chat connection "twitch:other"',
     });
     await harness.idle();
@@ -135,12 +136,22 @@ describe('chat connections', () => {
       harness.call('chat.send', { target: { platform: 'twitch' }, text: 'hi' }),
     ).resolves.toEqual({
       ok: false,
-      reason: 'not-found',
+      reason: 'custom',
+      error: {
+        code: 'ambiguous-target',
+        platform: 'twitch',
+        connections: ['twitch:roman', 'twitch:other'],
+      },
       message: 'Several twitch chats are connected and none is the default',
     });
     await expect(
       harness.call('chat.send', { target: { platform: 'youtube' }, text: 'hi' }),
-    ).resolves.toEqual({ ok: false, reason: 'not-found', message: 'No youtube chat is connected' });
+    ).resolves.toEqual({
+      ok: false,
+      reason: 'not-found',
+      error: { code: 'platform-not-connected', platform: 'youtube' },
+      message: 'No youtube chat is connected',
+    });
     await harness.stop();
   });
 });
@@ -164,6 +175,18 @@ describe('chat outbound', () => {
     await harness.stop();
   });
 
+  it('preserves a message-free domain failure returned by the provider', async () => {
+    const harness = await connected({ send: () => Promise.resolve(fail(permissionDenied, {})) });
+    await expect(
+      harness.call('chat.send', { target: { connection: 'twitch:roman' }, text: 'hi' }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: 'forbidden',
+      error: { code: 'permission-denied' },
+    });
+    await harness.stop();
+  });
+
   it('answers forbidden for a vetoed message and never calls the provider', async () => {
     const send = sends();
     const harness = await connected({ send });
@@ -175,6 +198,7 @@ describe('chat outbound', () => {
     ).resolves.toEqual({
       ok: false,
       reason: 'forbidden',
+      error: { code: 'send-vetoed', connection: 'twitch:roman', vetoedBy: 'filter' },
       message: 'Vetoed by filter: no spoilers',
     });
     expect(send).not.toHaveBeenCalled();
@@ -190,6 +214,7 @@ describe('chat outbound', () => {
     ).resolves.toEqual({
       ok: false,
       reason: 'unsupported',
+      error: { code: 'unsupported-capability', connection: 'twitch:roman', capability: 'send' },
       message: 'roman (twitch:roman) cannot send messages',
     });
     expect(tap).not.toHaveBeenCalled();
@@ -207,6 +232,7 @@ describe('chat outbound', () => {
     ).resolves.toEqual({
       ok: false,
       reason: 'platform-error',
+      error: { code: 'provider-error', connection: 'twitch:roman', capability: 'send' },
       message: 'twitch:roman: socket closed',
     });
     expect(logger.lines).toContainEqual({
@@ -220,11 +246,21 @@ describe('chat outbound', () => {
   it("passes the provider's own failures through", async () => {
     const harness = await connected({
       send: () =>
-        Promise.resolve({ ok: false, reason: 'rate-limited', message: 'Twitch dropped it' }),
+        Promise.resolve({
+          ok: false,
+          reason: 'rate-limited',
+          error: { code: 'rate-limited' },
+          message: 'Twitch dropped it',
+        }),
     });
     await expect(
       harness.call('chat.send', { target: { platform: 'twitch' }, text: 'hi' }),
-    ).resolves.toEqual({ ok: false, reason: 'rate-limited', message: 'Twitch dropped it' });
+    ).resolves.toEqual({
+      ok: false,
+      reason: 'rate-limited',
+      error: { code: 'rate-limited' },
+      message: 'Twitch dropped it',
+    });
     await harness.stop();
   });
 
@@ -291,6 +327,7 @@ describe('chat outbound', () => {
       'youtube:roman': {
         ok: false,
         reason: 'unsupported',
+        error: { code: 'unsupported-capability', connection: 'youtube:roman', capability: 'send' },
         message: 'roman (youtube:roman) cannot send messages',
       },
     });
@@ -310,9 +347,25 @@ describe('chat outbound', () => {
     await startTap(harness, 'filter', (input, { veto }) =>
       input.connection === 'kick:roman' ? veto('not on kick') : undefined,
     );
-    await expect(harness.call('chat.broadcast', { text: 'hi' })).resolves.toEqual({
+    await expect(
+      harness.call('chat.broadcast', {
+        text: 'hi',
+        connections: ['twitch:roman', 'kick:roman', 'twitch:gone'],
+      }),
+    ).resolves.toEqual({
+      'twitch:gone': {
+        ok: false,
+        reason: 'not-found',
+        error: { code: 'connection-not-found', connection: 'twitch:gone' },
+        message: 'There is no chat connection "twitch:gone"',
+      },
       'twitch:roman': { ok: true, messageId: 'sent:hi' },
-      'kick:roman': { ok: false, reason: 'forbidden', message: 'Vetoed by filter: not on kick' },
+      'kick:roman': {
+        ok: false,
+        reason: 'forbidden',
+        error: { code: 'send-vetoed', connection: 'kick:roman', vetoedBy: 'filter' },
+        message: 'Vetoed by filter: not on kick',
+      },
     });
     await harness.stop();
   });
@@ -326,6 +379,7 @@ describe('chat outbound', () => {
       'twitch:gone': {
         ok: false,
         reason: 'not-found',
+        error: { code: 'connection-not-found', connection: 'twitch:gone' },
         message: 'There is no chat connection "twitch:gone"',
       },
     });

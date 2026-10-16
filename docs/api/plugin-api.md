@@ -1,4 +1,4 @@
-# PetalBot Plugin API (apiVersion 1)
+# PetalBot Plugin API (apiVersion 2)
 
 This is the reference for plugin authors. The browser-facing APIs are generated:
 `docs/api/openapi.json` (HTTP) and `docs/api/asyncapi.json` (WebSocket). The UI SDK
@@ -17,7 +17,7 @@ A plugin is a workspace package. `package.json` names the plugin and its depende
   "scripts": { "build": "vite build", "dev": "vite build --watch" },
   "petalbot": {
     "id": "alerts", // ^[a-z][a-z0-9-]*$, not "core" or "petalbot"
-    "apiVersion": 1,
+    "apiVersion": 2,
     "dependencies": { "stream": "^1.0.0" }, // ranges match dependency contract versions
     "optionalDependencies": {},
   },
@@ -54,7 +54,7 @@ export const alertsContract = defineContract({
   rpc: {
     recent: { kind: 'query', output: z.array(Alert), expose: { panel: 'mod', overlay: true } }, // no input
 
-    clear: { output: Result(z.object({})), expose: { panel: 'owner' } },
+    clear: { output: Result(z.object({}), []), expose: { panel: 'owner' } },
   },
   providers: { sink: { show: { input: Alert, output: z.object({}) } } },
   widgets: { latest: { config: z.object({ count: z.number().int().default(3) }) } },
@@ -89,7 +89,7 @@ Versioning:
 
 - Adding members or optional fields is a minor version.
 - Changing an RPC's `kind` is a major version: clients switch between `useQuery` and `useMutation`.
-- Removing or renaming anything, making a field required, changing a type, or adding a literal to a closed union (including `Result` failure reasons) is a major version.
+- Removing or renaming anything, making a field required, changing a type, or adding a literal to a closed union (including an operation's failure codes or SDK `FailureReason` categories) is a major version.
 
 ## Server entry: `definePlugin`
 
@@ -367,7 +367,7 @@ Platform plugins limit their own outbound calls (spec §6.6):
 const limiter = createRateLimiter({ limit: 20, windowMs: 30_000, maxQueue: 20, maxWaitMs: 10_000 });
 ctx.onDispose(() => limiter.dispose());
 const result = await limiter.schedule(() => api.send(text));
-if (!result.ok) return result; // { ok: false, reason: 'rate-limited', message }
+if (!result.ok) return result; // { ok: false, reason: 'rate-limited', error: { code: 'rate-limited' }, message? }
 ```
 
 - Sliding window over task starts; the budget is `max(1, floor(limit * safetyFactor))` (default 0.9).
@@ -376,9 +376,113 @@ if (!result.ok) return result; // { ok: false, reason: 'rate-limited', message }
 
 ## Errors and results
 
-- Infrastructure failures throw `PetalBotError` subclasses: `ValidationError`, `PluginUnavailableError`, `RpcTimeoutError`, `AccessError`, `ContractVersionError`.
-- Domain outcomes (anything a platform can refuse) are returned as `Result` values: `ok(value)` or `fail(reason, message)`, with the closed reason set in `FAILURE_REASONS`.
-- Browsers see `{ code, message }` only. Messages of `PetalBotError`s are passed through; any other error becomes `internal`.
+Infrastructure failures throw `PetalBotError` subclasses: `ValidationError`,
+`PluginUnavailableError`, `RpcTimeoutError`, `AccessError`, `ContractVersionError`. Rejected
+browser calls carry `{ code, message }`; `PetalBotError` messages pass through, other exceptions
+become `internal`.
+
+Expected domain outcomes use `Result(successObject, [failureDefinitions])`. Each operation
+selects its exact possible failures. `[]` means success only; no failure is included implicitly.
+Duplicate codes in one Result, an empty definition code, `code` in detail fields and `ok` in
+success fields are rejected. The generic `Result<T, F = never>` likewise defaults to success only.
+
+The SDK's closed `FailureReason` categories are `unsupported`, `forbidden`, `not-found`,
+`rate-limited`, `platform-error`, `custom`. Generic consumers switch exhaustively on `reason`;
+dependants switch on `error.code` for the operation's exact variants. Use `custom` when no
+category fits, such as a domain queue being full. A new definition alone doesn't expand existing
+operations; adding a variant to an operation is a breaking contract change.
+
+```ts
+// contract.ts: shared by producers, dependants and the browser
+import { z } from 'zod';
+import { defineFailure, Result } from '@petalbot/sdk';
+
+export const groupNotFound = defineFailure({
+  code: 'group-not-found',
+  reason: 'not-found',
+  details: z.object({ groupId: z.string() }),
+});
+export const entityNotFound = defineFailure({
+  code: 'entity-not-found',
+  reason: 'not-found',
+  details: z.object({ groupId: z.string(), entityId: z.string() }),
+});
+export const ReadEntityResult = Result(z.object({ text: z.string() }), [
+  groupNotFound,
+  entityNotFound,
+]);
+export const queueFull = defineFailure({
+  code: 'queue-full',
+  reason: 'custom',
+  details: z.object({ capacity: z.number().int().positive() }),
+});
+```
+
+```ts
+// producer: diagnostics are optional
+import { fail } from '@petalbot/sdk';
+import { entityNotFound } from './contract.ts';
+const missing = fail(entityNotFound, { groupId: 'g', entityId: 'e' });
+// { ok: false, reason: 'not-found', error: { code: 'entity-not-found', groupId: 'g', entityId: 'e' } }
+```
+
+```ts
+// client-only presenter: imports the contract, never the server
+import type { z } from 'zod';
+import type { Failure } from '@petalbot/sdk';
+import { presentFailure } from '@petalbot/ui-sdk';
+import { ReadEntityResult } from './contract.ts';
+
+function presentReadFailure(failure: Extract<z.output<typeof ReadEntityResult>, Failure>): string {
+  const error = failure.error;
+  switch (error.code) {
+    case 'group-not-found':
+      return `Group ${error.groupId} no longer exists.`;
+    case 'entity-not-found':
+      return `Entity ${error.entityId} is missing from group ${error.groupId}.`;
+  }
+  error satisfies never;
+}
+// useMutation({ error: 'Could not read', presentFailure: presentReadFailure })
+// Or for a manually handled result: presentFailure(result, presentReadFailure)
+```
+
+`defineFailure` returns `code`, `reason` and `schema`. `fail(definition, details, message?)`
+constructs that schema's **input**, without parsing it; the RPC/provider boundary validates it.
+If a variable holds several possible definitions, narrow it by `definition.code` before calling
+`fail` so the selected definition and required details stay correlated.
+`message` is optional developer diagnostics, never automatic UI copy. Put only caller-appropriate
+data in public details. Use explicit client presenters plus category fallbacks (see
+[UI SDK](ui-sdk.md#failure-presentation)); no presenter registry or diagnostic fallback exists.
+
+Codec fields keep input/output distinct. For `{ at: codecs.isoDate() }`, producers supply an
+ISO string and consumers receive a Date. A domain forwarding a decoded provider result through
+a second boundary using the same schema must encode it first:
+
+```ts
+const providerResult = await provider.call('read', {}); // decoded: error.at is Date
+return z.encode(ReadResult, providerResult); // RPC implementation returns schema input
+```
+
+Plain JSON details need no conversion. Error codecs are encoded by the gateway and decoded by
+the browser just like success payloads. Unexpected codes, categories or invalid details fail
+schema validation.
+
+`createRateLimiter` returns the exported `rateLimitedFailure` definition's envelope on queue
+rejection/disposal. Select it explicitly in any operation forwarding those outcomes:
+
+```ts
+import { rateLimitedFailure, Result } from '@petalbot/sdk';
+const SendResult = Result(z.object({ messageId: z.string() }), [rateLimitedFailure]);
+```
+
+Provider slots own their failure schemas. Implementers import the owner's definitions and
+translate private platform errors; they cannot add private codes to the slot's output. See the
+[chat failure table](../../plugins/chat/README.md#failure-contract) for the concrete contract.
+
+This migration requires SDK/UI SDK `1.0.0` and `petalbot.apiVersion: 2` (API 1 is rejected).
+Chat is `2.0.0`, counter `4.0.0`; stream stays `1.0.0` and targets API 2. Rebuild plugins and
+update actual dependency ranges to `chat: ^2.0.0` / `counter: ^4.0.0`.
 
 ## Defaults and limits
 

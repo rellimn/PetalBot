@@ -32,7 +32,7 @@ api.counter.changed.useEvent((event) => playSound());
 ```
 
 - **Shape:** `api.<contractId>.<member>` mirrors the qualified name. There's one namespace for the own contract and one per dependency, with only the members the client may use: for the panel, RPCs with `expose.panel` and events exposed to `panel`; for an overlay, what its declaration lists.
-- **Read or write comes from the contract:** RPCs with `kind: 'query'` get `useQuery(input?, { enabled, refetchInterval })` (a TanStack query). All other RPCs get `useMutation({ success?, error? })` (a TanStack mutation; `mutate()` takes no argument for RPCs without input). Every RPC has `call(input?)`, and every event has `useEvent(handler)`. `queries` accepts only query RPCs and `mutations` only mutation RPCs; a query not listed in `queries` is a plain query.
+- **Read or write comes from the contract:** RPCs with `kind: 'query'` get `useQuery(input?, { enabled, refetchInterval })` (a TanStack query). All other RPCs get `useMutation({ success?, error?, presentFailure?, onMutate?, onSuccess?, onError?, onSettled? })` (a TanStack mutation; `mutate()` takes no argument for RPCs without input). Every RPC has `call(input?)`, and every event has `useEvent(handler)`. `queries` accepts only query RPCs and `mutations` only mutation RPCs; a query not listed in `queries` is a plain query.
 - **Freshness is declared once per client, not per component:**
 
 | Option                                            | On the event                           | Round trip | Good for                                             |
@@ -43,7 +43,7 @@ api.counter.changed.useEvent((event) => playSound());
 `update` runs once per cached entry (one per input); `input` is that entry's input. Return `data` unchanged when the event doesn't concern the entry, and a new object when it does (never mutate). It only runs when the entry has data and no fetch is in flight; otherwise the query refetches. Live queries refetch after a reconnect.
 
 - **Invalidation:** after a successful mutation, every query of the client's own contract (listed in `queries` or not) is refetched in this tab. `mutations: { name: { invalidates: [...] } }` replaces that list, and `[]` turns it off. Other tabs, users and overlays only learn about changes through events, so state that others display must be announced with an event.
-- **Toasts:** `success` and `error` (a string or a function) raise a toast. The error's message, or a failed `Result`'s message, becomes the description. A result shaped like a failed `Result` (`{ ok: false, message }`) counts as an error for toasts, while TanStack's `isSuccess` stays true.
+- **Toasts:** `success` and `error` (a string or a function) raise a toast. A decoded Result failure uses category fallback text or an explicit `presentFailure` callback; diagnostic `message` is never used automatically. Returned failures still resolve the mutation (`isSuccess`, `onSuccess`); only rejected calls invoke `onError`. Successful values alone trigger the success toast. Invalidation runs for every resolved value, including returned failures.
 - **Query for what _is_, `useEvent` for what _happened_:** displayed state comes from a query; `useEvent` is for sounds, animations, alerts and toasts.
 - **Hook rules:** `api.x.y.useQuery()` and the other handle methods are hooks. ESLint can't check member-chain calls, so never call them conditionally or in loops.
 
@@ -146,3 +146,41 @@ correction (about 0.5 px at 27 px and 1 px at 54 px).
 
 Schemes: dark Rose (default), Lavender, Spring Leaf, Peach Blossom, Dark Gray; light Light (default),
 Cream. Densities: Comfortable (default), Compact. Each user picks them in the user menu.
+
+## Failure presentation
+
+`presentFailure(failure, presenter?)` is a pure helper returning user-facing text.
+`FailurePresenter<F extends Failure>` is `(failure: F) => string | undefined`. A presenter may
+handle only useful contextual cases and return `undefined` for the category fallback; an empty
+string is intentional. Exceptions from presenters propagate. The helper never reads diagnostic
+`message`, logs, or emits a toast.
+
+| Category         | Fallback                                            |
+| ---------------- | --------------------------------------------------- |
+| `unsupported`    | This action is not supported.                       |
+| `forbidden`      | This action is not allowed.                         |
+| `not-found`      | The requested item could not be found.              |
+| `rate-limited`   | Too many requests. Please try again later.          |
+| `platform-error` | The external service could not complete the action. |
+| `custom`         | The action could not be completed.                  |
+
+```ts
+const increment = api.counter.increment.useMutation({
+  error: 'Could not count',
+  presentFailure: (failure) => {
+    // Exact declared payload, including failure.error.counterId.
+    if (failure.error.code === 'counter-not-found') return 'This counter no longer exists.';
+    return undefined;
+  },
+});
+```
+
+The option is typed to `Extract<Output, Failure>` and unavailable for scalar, ordinary object,
+success-only or broadcast-record outputs. It only runs when an automatic `error` toast is
+requested. Nested Results are handled explicitly by the caller. Function-form `error` receives
+`{ message: presentationText }` for returned failures; rejected RPCs keep their `ClientError`.
+
+`onMutate`, `onSuccess`, `onError` and `onSettled` retain TanStack's arguments, inferred rollback
+context and awaited sequencing. `onSuccess` receives the original decoded Result, including any
+diagnostics, even on failure; per-call callbacks behave the same way. This is independent of
+whether toasts are enabled. There are no new automatic retries.

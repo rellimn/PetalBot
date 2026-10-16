@@ -10,7 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import { asc, eq, sql } from 'drizzle-orm';
 import { ValidationError, definePlugin, fail, ok } from '@petalbot/sdk';
-import { counterContract, type Counter } from './contract.ts';
+import { counterContract, counterNotFound, type Counter } from './contract.ts';
 import { counters } from './db/schema.ts';
 
 type Row = typeof counters.$inferSelect;
@@ -27,7 +27,8 @@ export default definePlugin(counterContract, {
   setup(ctx) {
     ctx.log.info('Counter ready', { step: ctx.settings.get().step });
 
-    const notFound = (id: string) => fail('not-found', `There is no counter "${id}"`);
+    const notFound = (id: string) =>
+      fail(counterNotFound, { counterId: id }, `There is no counter "${id}"`);
 
     /** Announces a changed value and builds the RPC result. */
     const changed = (row: Row, by: string) => {

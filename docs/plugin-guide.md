@@ -88,10 +88,15 @@ other plugins all import it, so it may import only `zod` and `@petalbot/sdk`, ne
 
 ```ts
 // plugins/counter/src/contract.ts
+export const counterNotFound = defineFailure({
+  code: 'counter-not-found',
+  reason: 'not-found',
+  details: z.object({ counterId: z.string() }),
+});
 export const counterContract = defineContract({
   id: 'counter',
   // Must equal the package.json version. A breaking change to this contract is a major bump.
-  version: '3.0.0',
+  version: '4.0.0',
   // ...
   rpc: {
     // `kind: 'query'` marks a read: clients get useQuery for it and may repeat it freely (on
@@ -111,7 +116,7 @@ export const counterContract = defineContract({
     // Result: "not found" is an expected outcome the caller handles, not a crash.
     increment: {
       input: CounterRef,
-      output: Result(z.object({ counter: Counter })),
+      output: Result(z.object({ counter: Counter }), [counterNotFound]),
       expose: { panel: 'mod' },
     },
     // …
@@ -149,8 +154,8 @@ export const counterContract = defineContract({
 - **`choice('<plugin>.<rpc>')`** is a string field whose valid values an own query RPC lists at
   runtime (`kind: 'query'`, no input, output `Choices`: `[{ value, label }]`). Forms render it
   as a select.
-- **`Result(z.object({…}))`** is an RPC output that is either `{ ok: true, … }` or
-  `{ ok: false, reason, message }`, for outcomes the caller must handle.
+- **`Result(z.object({ ... }), [definitions])`** is an RPC output that is either `{ ok: true, … }` or
+  `{ ok: false, reason, error: { code, ...details }, message? }`, for outcomes the caller must handle.
 
 Keep the contract's data shapes separate from storage: the counter's `Counter` schema is not its
 Drizzle table, so the table can change without breaking anyone who depends on the contract.
@@ -249,7 +254,7 @@ without `await` inside runs as one unit:
 ```
 
 **Errors.** Throw `ValidationError` for the caller's mistakes (the panel shows its issues on the
-form fields). Return `fail(reason, message)` from a `Result` RPC for outcomes the caller must
+form fields). Return `fail(definition, details, message?)` from a `Result` RPC for outcomes the caller must
 handle (`not-found`, `forbidden`, `rate-limited`, …). Anything else that throws becomes an
 `internal` error for browsers and counts toward the plugin's health.
 
@@ -300,7 +305,9 @@ export const api = createPluginClient(counterContract, {
   already keep things live. Other tabs, users and overlays only learn about changes through
   events.
 - **Toasts.** `useMutation({ error: 'Could not count' })` shows a toast on failure; a failed
-  `Result` counts as a failure.
+  `Result` counts as a failure. Descriptions come from category fallbacks or an explicit
+  `presentFailure` callback, never diagnostic `message`. Returned failures still invoke
+  `onSuccess`; rejected calls invoke `onError`.
 
 ## 6. The panel
 
@@ -568,7 +575,7 @@ including ones added later.
 ### Using the domains
 
 Depend on the domain like on any plugin (section 9): in `package.json`, list it under
-`petalbot.dependencies` (`"chat": "^1.0.0"`) and add the package (`"@petalbot-plugin/chat":
+`petalbot.dependencies` (`"chat": "^2.0.0"`) and add the package (`"@petalbot-plugin/chat":
 "workspace:*"`), then import its contract from `@petalbot-plugin/chat/contract`:
 
 ```ts
@@ -589,10 +596,10 @@ export default definePlugin(greeterContract, {
 
 - **Targets.** `{ connection: 'twitch:roman' }`, or `{ platform: 'twitch' }` for that platform's
   default connection (or its only one). Replies go where the message came from.
-- **Results, not exceptions.** Every operation answers `{ ok: true, ... }` or
-  `{ ok: false, reason, message }`: `not-found` (no such connection), `unsupported` (the platform
-  can't do it), `forbidden` (a `chat.beforeSend` tap vetoed, or the platform refused),
-  `rate-limited` (not sent: too many messages) or `platform-error` (the platform failed).
+- **Exact results.** Each operation declares its variants: the closed `reason` is a generic
+  category and `error.code` identifies the precise typed payload. `message?` is diagnostic.
+  Ambiguous platform targets use `custom` / `ambiguous-target`; absent connections and platforms
+  have distinct `not-found` codes. See the [complete chat table](../plugins/chat/README.md#failure-contract).
 - **Replies.** `chat.reply` answers natively where the platform can (`delivery: 'native'`), else
   the platform mentions the author in its own syntax (`delivery: 'mention'`).
 - **`chat.broadcast`** sends to every connection at once (or those of `platforms` /
@@ -614,7 +621,11 @@ reloads) and does three things per connection:
 const id = `twitch:${login}`; // <platform>:<channel>
 // 1. Provide: the domain calls these. Every method is optional.
 ctx.provide('chat.platform', id, {
-  send: async ({ text }) => limiter.schedule(() => api.send(text)).then(toResult),
+  send: async ({ text }) => {
+    const result = await limiter.schedule(() => api.send(text));
+    if (!result.ok) return result; // slot explicitly selects rateLimitedFailure
+    return toDomainSendResult(result.value); // map platform response to domain definitions
+  },
 });
 // 2. Announce the connection; only the plugin providing `id` may.
 await ctx.call('chat.registerConnection', {
@@ -628,9 +639,14 @@ await ctx.call('chat.registerConnection', {
 await ctx.call('chat.ingest', { id: msg.id, source: { platform: 'twitch', connection: id }, ... });
 ```
 
-- **Providers answer with a `Result`.** Map the platform's answers: a dropped or refused message
-  is `rate-limited` or `forbidden`, a 5xx is `platform-error`. A provider that throws becomes a
-  `platform-error` too, and is logged as a bug.
+- **Provider failures belong to the domain.** Import its failure definitions and use
+  `fail(definition, details, diagnostic?)`; private platform codes cannot escape through the
+  slot. Helix send rate-limit drops map to SDK `rateLimitedFailure`, other send drops to
+  `messageRejected`, permission refusals to `permissionDenied`, identifiable missing messages
+  to `messageNotFound` (reply/delete), identifiable missing users to `userNotFound` (timeout),
+  and other request failures to `providerError`. Unexpected exceptions are logged and mapped
+  to the same declared `providerError` by the domain. These are the M5c mapping rules; no
+  Twitch implementation is included yet.
 - **Rate limiting lives in the provider** (`createRateLimiter`, one per connection), not in the
   domain. `rate-limited` always means "not sent".
 - **Own the reply fallback.** Without native replies, mention the author in the platform's own
@@ -695,7 +711,7 @@ operation the provider can't do.
   written.
 - **Query:** an RPC with `kind: 'query'`: it only reads, and clients get `useQuery` for it,
   cached per input (sections 3 and 5).
-- **`Result`:** an RPC output that is `{ ok: true, … }` or `{ ok: false, reason, message }`
+- **`Result`:** an RPC output that is `{ ok: true, … }` or `{ ok: false, reason, error: { code, ...details }, message? }`
   (section 4).
 - **RPC:** a validated request-and-response call (section 3).
 - **Secrets:** encrypted per-plugin values such as tokens; never sent to the panel. Declared in the contract; the owner enters user-settable ones in the Secrets card.
@@ -705,3 +721,18 @@ operation the provider can't do.
 - **Veto:** a hook handler's answer that stops the action: `(input, { veto }) => veto(reason)`.
 - **Widget / widget instance:** a dashboard tile a plugin defines / one placed copy of it with
   its own config (section 6).
+
+### Declaring exact failures
+
+The [SDK Result example](api/plugin-api.md#errors-and-results) shows hierarchical group/entity
+errors, a custom queue failure, exact narrowing and an explicit client presenter. Every Result
+builder needs a failure list (`[]` for success only); adding a variant to an operation is a major
+contract change. The SDK/UI SDK are now `1.0.0`; plugins target API 2 only. Rebuild existing
+plugins; real chat/counter dependency ranges are `^2.0.0`/`^4.0.0`.
+
+Provider slots and their methods select exact unions too. The
+[chat failure table](../plugins/chat/README.md#failure-contract) is authoritative for platform
+implementers. Reuse owner definitions even when a platform has its own private error schema.
+For codec-backed detail fields, a producer returns schema input and consumers receive decoded
+output; forwarding through another boundary requires `z.encode(OutputSchema, decodedResult)`.
+Plain JSON details pass straight through.

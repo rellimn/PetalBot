@@ -47,7 +47,7 @@ export async function writePlugin(
     JSON.stringify({
       name: id,
       version: '1.0.0',
-      petalbot: { id, apiVersion: 1, dependencies },
+      petalbot: { id, apiVersion: 2, dependencies },
     }),
   );
   await writeBuild(dir, {

@@ -1,3 +1,4 @@
+export { presentFailure, type FailurePresenter } from './failure.ts';
 export {
   COLOR_TOKENS,
   DARK_SCHEMES,

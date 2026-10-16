@@ -1,3 +1,5 @@
+import { fail, defineFailure, Result } from '@petalbot/sdk';
+import { late, resultContract, timestamp } from './result-fixture.ts';
 import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 import {
@@ -158,5 +160,47 @@ describe('ProviderRegistry change listeners', () => {
       AccessError,
     );
     expect(changes).toEqual([]);
+  });
+});
+
+describe('provider Result boundaries', () => {
+  it('decodes failures using the running owner contract, including after replacement', async () => {
+    const contracts = new ContractRegistry();
+    const unregister = contracts.register(resultContract);
+    const registry = new ProviderRegistry(contracts);
+    registry.register('source', 'clock.source', resultContract.providers.source, 'one', {
+      read: () => Promise.resolve(fail(late, { at: timestamp })),
+    });
+    const handle = registry.view('clock.source').get('one');
+    await expect(handle?.call('read', {})).resolves.toEqual({
+      ok: false,
+      reason: 'custom',
+      error: { code: 'late', at: new Date(timestamp) },
+    });
+    unregister();
+    const gone = defineFailure({ code: 'gone', reason: 'not-found', details: z.object({}) });
+    contracts.register(
+      defineContract({
+        ...resultContract,
+        providers: {
+          source: { read: { input: z.object({}), output: Result(z.object({}), [gone]) } },
+        },
+      }),
+    );
+    await expect(handle?.call('read', {})).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it.each([
+    { ok: false, reason: 'custom', error: { code: 'private', at: timestamp } },
+    { ok: false, reason: 'not-found', error: { code: 'late', at: timestamp } },
+    { ok: false, reason: 'custom', error: { code: 'late', at: 'invalid' } },
+  ])('rejects an invalid provider failure: %j', async (value) => {
+    const registry = new ProviderRegistry();
+    registry.register('source', 'clock.source', resultContract.providers.source, 'one', {
+      read: () => Promise.resolve(value),
+    });
+    await expect(registry.view('clock.source').get('one')?.call('read', {})).rejects.toBeInstanceOf(
+      ValidationError,
+    );
   });
 });

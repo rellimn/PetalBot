@@ -447,6 +447,23 @@ describe('ClientGateway', () => {
     });
   });
 
+  it('encodes a failure detail codec without requiring diagnostics', async () => {
+    const { connect } = await setup();
+    const { transport, send } = connect(asMod);
+    send({ type: 'rpc', id: 'late', name: 'alerts.late' });
+    await vi.waitFor(() => {
+      expect(transport.reply('late')).toEqual({
+        type: 'reply',
+        id: 'late',
+        result: {
+          ok: false,
+          reason: 'custom',
+          error: { code: 'late', at: '2026-10-16T10:00:00.000Z' },
+        },
+      });
+    });
+  });
+
   it('refuses to send what a schema cannot encode, and says why once', async () => {
     const entries: LogEntry[] = [];
     const { connect, broken } = await setup({ logger: createMemoryLogger(entries) });

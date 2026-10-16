@@ -1,3 +1,7 @@
+import { z } from 'zod';
+import { fail } from '@petalbot/sdk';
+import { ProviderRegistry } from '../src/provider-registry.ts';
+import { late, LateResult, resultContract, timestamp } from './result-fixture.ts';
 import { describe, expect, it } from 'vitest';
 import {
   AccessError,
@@ -83,6 +87,47 @@ describe('RpcRouter', () => {
     dispose();
     await expect(rpc.call('quotes', 'counter.double', { n: 1 })).rejects.toBeInstanceOf(
       PluginUnavailableError,
+    );
+  });
+});
+
+describe('RPC Result boundaries', () => {
+  it('decodes failures and forwards decoded provider details through the schema input', async () => {
+    const contracts = new ContractRegistry();
+    contracts.register(resultContract);
+    const providers = new ProviderRegistry(contracts);
+    providers.register('source', 'clock.source', resultContract.providers.source, 'one', {
+      read: () => Promise.resolve(fail(late, { at: timestamp })),
+    });
+    const rpc = new RpcRouter({ contracts, timeoutMs: 1000 });
+    rpc.register('clock.read', async () => {
+      const decoded = await providers.view('clock.source').get('one')?.call('read', {});
+      expect(decoded).toEqual({
+        ok: false,
+        reason: 'custom',
+        error: { code: 'late', at: new Date(timestamp) },
+      });
+      // The registry's runtime handle is erased; the contract supplies its concrete output.
+      return z.encode(LateResult, decoded as z.output<typeof LateResult>);
+    });
+    await expect(rpc.call('consumer', 'clock.read', undefined)).resolves.toEqual({
+      ok: false,
+      reason: 'custom',
+      error: { code: 'late', at: new Date(timestamp) },
+    });
+  });
+
+  it.each([
+    { ok: false, reason: 'custom', error: { code: 'private', at: timestamp } },
+    { ok: false, reason: 'not-found', error: { code: 'late', at: timestamp } },
+    { ok: false, reason: 'custom', error: { code: 'late', at: 'invalid' } },
+  ])('rejects an invalid handler failure: %j', async (value) => {
+    const contracts = new ContractRegistry();
+    contracts.register(resultContract);
+    const rpc = new RpcRouter({ contracts, timeoutMs: 1000 });
+    rpc.register('clock.read', () => value);
+    await expect(rpc.call('consumer', 'clock.read', undefined)).rejects.toBeInstanceOf(
+      ValidationError,
     );
   });
 });

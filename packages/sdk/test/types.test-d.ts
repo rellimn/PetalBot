@@ -5,7 +5,6 @@ import type { ProviderChange, ProviderHandle } from '../src/context.ts';
 import type { EventEnvelope } from '../src/envelope.ts';
 import { defineContract } from '../src/contract.ts';
 import { definePlugin } from '../src/plugin.ts';
-import type { FailureReason } from '../src/result.ts';
 import type { Disposer } from '../src/type-utils.ts';
 import { bareContract, chatContract, pointsContract, quotesContract } from './fixtures.ts';
 
@@ -69,8 +68,14 @@ describe('ctx.call', () => {
         const balance = await ctx.call('points.getBalance', { userId: 'u' });
         expectTypeOf(balance).toEqualTypeOf<number>();
         const sent = await ctx.call('chat.send', { text: 'hi' }, { timeoutMs: 100 });
-        expectTypeOf(sent).toEqualTypeOf<
-          { ok: true; messageId: string } | { ok: false; reason: FailureReason; message: string }
+        expectTypeOf(sent).toExtend<
+          | { ok: true; messageId: string }
+          | {
+              ok: false;
+              reason: 'forbidden';
+              error: { code: 'send-denied' };
+              message?: string | undefined;
+            }
         >();
         return { rpc: { list: () => [] } };
       },
@@ -97,10 +102,7 @@ describe('ctx.call', () => {
         // @ts-expect-error -- messageId only exists after checking ok
         expectTypeOf(sent.messageId).toBeString();
         if (sent.ok) expectTypeOf(sent.messageId).toEqualTypeOf<string>();
-        else
-          expectTypeOf(sent.reason).toEqualTypeOf<
-            'unsupported' | 'forbidden' | 'not-found' | 'rate-limited' | 'platform-error'
-          >();
+        else expectTypeOf(sent.reason).toEqualTypeOf<'forbidden'>();
         return { rpc: { list: () => [] } };
       },
     });
@@ -153,7 +155,16 @@ describe('providers', () => {
           const out = await handle.call('send', { text: 'hi' });
           expectTypeOf(out).toEqualTypeOf<{ messageId: string }>();
         }
-        return { rpc: { send: () => ({ ok: false, reason: 'unsupported', message: 'x' }) } };
+        return {
+          rpc: {
+            send: () => ({
+              ok: false,
+              reason: 'forbidden',
+              error: { code: 'send-denied' },
+              message: 'x',
+            }),
+          },
+        };
       },
     });
   });
@@ -166,7 +177,16 @@ describe('providers', () => {
           expectTypeOf(change.change).toEqualTypeOf<'added' | 'removed'>();
         });
         expectTypeOf(stop).toEqualTypeOf<Disposer>();
-        return { rpc: { send: () => ({ ok: false, reason: 'unsupported', message: 'x' }) } };
+        return {
+          rpc: {
+            send: () => ({
+              ok: false,
+              reason: 'forbidden',
+              error: { code: 'send-denied' },
+              message: 'x',
+            }),
+          },
+        };
       },
     });
   });
@@ -192,8 +212,15 @@ describe('definePlugin rpc implementations', () => {
   it('keeps literal return types in zero-argument implementations', () => {
     definePlugin(chatContract, {
       setup: () => ({
-        // eslint-disable-next-line @typescript-eslint/require-await -- async on purpose: tests literal inference
-        rpc: { send: async () => ({ ok: false, reason: 'unsupported', message: 'x' }) },
+        rpc: {
+          // eslint-disable-next-line @typescript-eslint/require-await -- async on purpose: tests literal inference
+          send: async () => ({
+            ok: false,
+            reason: 'forbidden',
+            error: { code: 'send-denied' },
+            message: 'x',
+          }),
+        },
       }),
     });
   });

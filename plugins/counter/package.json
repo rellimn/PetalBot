@@ -1,6 +1,6 @@
 {
   "name": "@petalbot-plugin/counter",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,7 +11,7 @@
   },
   "petalbot": {
     "id": "counter",
-    "apiVersion": 1
+    "apiVersion": 2
   },
   "dependencies": {
     "@petalbot/sdk": "workspace:*",

@@ -1,10 +1,15 @@
 import type { UseMutationResult } from '@tanstack/react-query';
 import { describe, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
-import { Choices, Result, defineContract } from '@petalbot/sdk';
+import { Choices, Result, defineContract, defineFailure } from '@petalbot/sdk';
 import type { ClientError } from '../src/client/errors.ts';
 import { createPluginClient } from '../src/client/plugin-client.ts';
 
+const counterNotFound = defineFailure({
+  code: 'counter-not-found',
+  reason: 'not-found',
+  details: z.object({ counterId: z.string() }),
+});
 const Counter = z.object({ id: z.string(), name: z.string(), value: z.number().int() });
 const Ref = z.object({ counter: z.string() });
 const counter = defineContract({
@@ -29,17 +34,18 @@ const counter = defineContract({
     },
     increment: {
       input: Ref,
-      output: Result(z.object({ counter: Counter })),
+      output: Result(z.object({ counter: Counter }), [counterNotFound]),
       expose: { panel: 'mod' },
     },
     reset: {
       kind: 'mutation',
       input: Ref,
-      output: Result(z.object({ counter: Counter })),
+      output: Result(z.object({ counter: Counter }), [counterNotFound]),
       expose: { panel: 'mod' },
     },
     create: { input: z.object({ name: z.string() }), output: Counter, expose: { panel: 'owner' } },
     clear: { output: z.number(), expose: { panel: 'owner' } },
+    done: { output: Result(z.object({}), []), expose: { panel: 'mod' } },
     hidden: { kind: 'query', output: z.string() },
   },
 });
@@ -301,6 +307,30 @@ export function UsesInputlessMutationContext() {
       expectTypeOf(input).toBeVoid();
       expectTypeOf(context).toEqualTypeOf<RollbackContext | undefined>();
     },
+  });
+  return null;
+}
+
+export function UsesPresenters() {
+  api.counter.increment.useMutation({
+    presentFailure: (failure) => {
+      expectTypeOf(failure.error.code).toEqualTypeOf<'counter-not-found'>();
+      expectTypeOf(failure.error.counterId).toEqualTypeOf<string>();
+      return 'Counter missing';
+    },
+  });
+  api.counter.clear.useMutation({
+    // @ts-expect-error -- a scalar output has no failure presenter
+    presentFailure: () => 'wrong',
+  });
+  api.counter.done.useMutation({
+    // @ts-expect-error -- success-only Results have no failure presenter
+    presentFailure: () => 'wrong',
+  });
+  api.counter.increment.useMutation({
+    // @ts-expect-error -- a presenter for another operation is incompatible
+    presentFailure: (failure: { ok: false; reason: 'custom'; error: { code: 'busy' } }) =>
+      failure.error.code,
   });
   return null;
 }

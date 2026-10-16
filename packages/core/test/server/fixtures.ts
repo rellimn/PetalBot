@@ -1,5 +1,7 @@
 import { z } from 'zod';
-import { codecs, defineContract, definePlugin, type PanelUser } from '@petalbot/sdk';
+import { fail, codecs, defineContract, definePlugin, type PanelUser } from '@petalbot/sdk';
+
+import { late, LateResult, timestamp } from '../result-fixture.ts';
 
 export const ownerUser: PanelUser = { id: 'u-owner', name: 'roman', role: 'owner' };
 export const modUser: PanelUser = { id: 'u-mod', name: 'mia', role: 'mod' };
@@ -39,6 +41,7 @@ export const alertsContract = defineContract({
       output: z.object({ at: codecs.isoDate() }),
       expose: { panel: 'mod' },
     },
+    late: { output: LateResult, expose: { panel: 'mod' } },
     lengths: {
       input: z.object({}),
       output: z.object({ n: z.string().transform((s) => s.length) }),
@@ -105,6 +108,7 @@ export function alertsPlugin(options: AlertsOptions = {}) {
           },
           hidden: () => ({}),
           when: () => ({ at: '2026-10-12T18:30:00.000Z' }),
+          late: () => fail(late, { at: timestamp }),
           lengths: () => ({ n: 'abc' }),
         },
       };

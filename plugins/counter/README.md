@@ -14,7 +14,7 @@ is there and are denser than elsewhere in the codebase. For the concepts behind 
 | A contract shape separate from the table, mapped in one function | `Counter` in `src/contract.ts`, `toCounter` in `src/server.ts` |
 | An atomic update: one `UPDATE … RETURNING` statement             | `increment` in `src/server.ts`                                 |
 | A transaction that throws a `ValidationError` on one field       | `create` in `src/server.ts`                                    |
-| `Result` with `not-found` for expected failures                  | `increment`, `reset`, `remove`                                 |
+| `Result` selecting `counterNotFound` for missing ids             | `increment`, `reset`, `remove`                                 |
 | `null` for things deleted since                                  | `get`, the widget and the overlay                              |
 | Emit after the write                                             | `changed()` in `src/server.ts`                                 |
 | A widget configured with `choice('counter.options')`             | `widgets` in `src/contract.ts`, `CounterWidget`                |
@@ -72,3 +72,8 @@ Never edit a migration that was already applied; add a new one.
   [testing](../../docs/plugin-guide.md#8-testing)
 - [Watch out for](../../docs/plugin-guide.md#10-watch-out-for) and
   [when to use what](../../docs/plugin-guide.md#11-when-to-use-what)
+
+Contract/package `4.0.0` targets API 2. `increment`, `reset` and `remove` select the exported
+`counterNotFound` definition: `{ ok: false, reason: 'not-found', error: { code:
+'counter-not-found', counterId }, message? }`. Diagnostics are optional. The shared client
+presenter says `This counter no longer exists.`; it never exposes diagnostic prose.

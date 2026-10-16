@@ -1,3 +1,6 @@
+import { z } from 'zod';
+import { Result } from '../src/result.ts';
+import { rateLimitedFailure } from '../src/rate-limiter.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRateLimiter, type RateLimiterOptions } from '../src/rate-limiter.ts';
 
@@ -26,6 +29,15 @@ describe('createRateLimiter', () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('returns failures accepted by explicitly selecting the limiter definition', async () => {
+    const limiter = createRateLimiter(options());
+    limiter.dispose();
+    const failure = await limiter.schedule(() => 'unused');
+    const schema = Result(z.object({ value: z.string() }), [rateLimitedFailure]);
+    expect(schema.parse(failure)).toEqual(failure);
+    expect(Result(z.object({ value: z.string() }), []).safeParse(failure).success).toBe(false);
   });
 
   it('starts tasks at once while the budget allows and returns their value', async () => {
@@ -85,6 +97,7 @@ describe('createRateLimiter', () => {
     expect(result).toEqual({
       ok: false,
       reason: 'rate-limited',
+      error: { code: 'rate-limited' },
       message: 'Rate limited: the queue is full (1 waiting)',
     });
     await vi.advanceTimersByTimeAsync(5000);
@@ -197,7 +210,12 @@ describe('createRateLimiter', () => {
     void limiter.schedule(task('a'));
     const b = limiter.schedule(task('b'));
     limiter.dispose();
-    const stopped = { ok: false, reason: 'rate-limited', message: 'Limiter stopped' };
+    const stopped = {
+      ok: false,
+      reason: 'rate-limited',
+      error: { code: 'rate-limited' },
+      message: 'Limiter stopped',
+    };
     expect(await b).toEqual(stopped);
     expect(await limiter.schedule(task('c'))).toEqual(stopped);
     await vi.advanceTimersByTimeAsync(5000);

@@ -9,7 +9,8 @@ import {
 } from '@tanstack/react-query';
 import { useEffect, useEffectEvent } from 'react';
 import type { z } from 'zod';
-import type { ContractShape, EventEnvelope, NoMembers, Role } from '@petalbot/sdk';
+import type { ContractShape, EventEnvelope, Failure, NoMembers, Role } from '@petalbot/sdk';
+import { isFailure, presentFailure, type FailurePresenter } from '../failure.ts';
 import { toast, type ToastInput } from '../components/Toaster.tsx';
 import type { OverlayEventName, OverlayName, OverlayRpcName, OverlayScope } from '../overlay.ts';
 import type { PetalConnection } from './connection.ts';
@@ -134,15 +135,19 @@ export interface QueryHandle<In, Out> {
   call(...args: CallArgs<In>): Promise<Out>;
 }
 
-export type MutationOptions<Input, Output, Context = unknown> = {
+type FailurePresentation<Output> = [Extract<Output, Failure>] extends [never]
+  ? { readonly presentFailure?: never }
+  : { readonly presentFailure?: FailurePresenter<Extract<Output, Failure>> };
+
+export type MutationOptions<Input, Output, Context = unknown> = FailurePresentation<Output> & {
   /** A toast after success (for `Result` outputs: only for `{ ok: true }`). */
   readonly success?: string | ((data: Output) => ToastInput);
-  /** A toast after failure, with the error's (or failed `Result`'s) message as the description. */
+  /** A failure toast: Result problems contain presentation text; rejected calls use ClientError. */
   readonly error?: string | ((problem: { readonly message: string }) => ToastInput);
 } & Pick<
-  UseMutationOptions<Output, ClientError, Input, Context>,
-  'onSuccess' | 'onMutate' | 'onError' | 'onSettled'
->;
+    UseMutationOptions<Output, ClientError, Input, Context>,
+    'onSuccess' | 'onMutate' | 'onError' | 'onSettled'
+  >;
 
 // `void` lets RPCs without input be called as `mutate()` (TanStack's convention).
 // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- see above
@@ -349,18 +354,6 @@ function queryHandle(
   };
 }
 
-/** A mutation result shaped like a failed `Result` (`{ ok: false, message }`). */
-function failedResult(data: unknown): { readonly message: string } | undefined {
-  return typeof data === 'object' &&
-    data !== null &&
-    'ok' in data &&
-    data.ok === false &&
-    'message' in data &&
-    typeof data.message === 'string'
-    ? { message: data.message }
-    : undefined;
-}
-
 function errorToast(
   option: NonNullable<MutationOptions<unknown, unknown>['error']>,
   problem: { readonly message: string },
@@ -387,11 +380,15 @@ function mutationHandle<Input, Output>(
         for (const query of invalidates) {
           void queryClient.invalidateQueries({ queryKey: ['petalbot', 'rpc', query] });
         }
-        const failed = failedResult(data);
         // Toasts
-        if (failed) {
+        if (isFailure(data)) {
           if (options.error !== undefined) {
-            toast(errorToast(options.error, failed));
+            // request decoded the operation schema before this envelope guard.
+            const message = presentFailure(
+              data as Extract<Output, Failure>,
+              options.presentFailure,
+            );
+            toast(errorToast(options.error, { message }));
           }
         } else if (options.success !== undefined) {
           toast(

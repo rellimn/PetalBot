@@ -16,6 +16,7 @@ import {
   definePanel,
   useStore,
 } from '@petalbot/ui-sdk';
+import { presentSendFailure } from './failure.ts';
 import { api } from './client.ts';
 import { chatContract, type ConnectionInfo, type RecentMessage } from './contract.ts';
 import styles from './panel.module.css';
@@ -69,7 +70,10 @@ function chosen(
 function SendBox({ connections }: { readonly connections: readonly ConnectionInfo[] }) {
   const picked = useStore(target, (state) => state.connection);
   const [text, setText] = useState('');
-  const send = api.chat.send.useMutation({ error: 'Could not send the message' });
+  const send = api.chat.send.useMutation({
+    error: 'Could not send the message',
+    presentFailure: presentSendFailure,
+  });
   const sendable = connections.filter((connection) => connection.capabilities.includes('send'));
   const connection = chosen(sendable, picked);
   if (!connection) {

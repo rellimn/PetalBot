@@ -44,7 +44,7 @@ describe('renderPlugin', () => {
       renderPlugin({ id: 'quotes', panel: false, db: false, overlays: [] }).get('package.json') ??
         '',
     ) as Record<string, unknown>;
-    expect(pkg.petalbot).toEqual({ id: 'quotes', apiVersion: 1 });
+    expect(pkg.petalbot).toEqual({ id: 'quotes', apiVersion: 2 });
     expect(Object.keys(pkg.dependencies as object)).toEqual(['@petalbot/sdk', 'zod']);
     expect(Object.keys(pkg.devDependencies as object)).toEqual([
       '@petalbot/testing',

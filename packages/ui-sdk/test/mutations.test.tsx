@@ -2,13 +2,18 @@ import { act, screen, waitFor } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { Result, defineContract } from '@petalbot/sdk';
+import { Result, defineContract, defineFailure } from '@petalbot/sdk';
 import { ClientError } from '../src/client/errors.ts';
 import { createPluginClient, type MutationOptions } from '../src/client/plugin-client.ts';
 import { Toaster } from '../src/components/Toaster.tsx';
 import type { FakeSocket } from './fake-socket.ts';
 import { renderWithPetal } from './render.tsx';
 
+const soldOut = defineFailure({
+  code: 'sold-out',
+  reason: 'custom',
+  details: z.object({ itemId: z.string() }),
+});
 const Item = z.object({ id: z.string() });
 const shop = defineContract({
   id: 'shop',
@@ -18,7 +23,12 @@ const shop = defineContract({
     stock: { kind: 'query', output: z.number(), expose: { panel: 'mod' } },
     buy: {
       input: z.object({ id: z.string() }),
-      output: Result(z.object({ left: z.number() })),
+      output: Result(z.object({ left: z.number() }), [soldOut]),
+      expose: { panel: 'mod' },
+    },
+    scalar: { output: z.number(), expose: { panel: 'mod' } },
+    broadcast: {
+      output: z.record(z.string(), Result(z.object({ left: z.number() }), [soldOut])),
       expose: { panel: 'mod' },
     },
     note: { input: z.object({ text: z.string() }), output: z.object({}), expose: { panel: 'mod' } },
@@ -122,12 +132,12 @@ describe('mutations', () => {
     act(() => {
       socket.answer(
         'rpc',
-        { ok: false, reason: 'not-found', message: 'Sold out' },
+        { ok: false, reason: 'custom', error: { code: 'sold-out', itemId: 'a' } },
         (message) => message.name === 'shop.buy',
       );
     });
     expect(await screen.findByText('Could not buy')).toBeTruthy();
-    expect(screen.getByText('Sold out')).toBeTruthy();
+    expect(screen.getByText('The action could not be completed.')).toBeTruthy();
     expect(screen.queryByText(/Bought/)).toBeNull();
     await waitFor(() => {
       expect(calls(socket, 'shop.items')).toBe(2);
@@ -159,8 +169,14 @@ interface RollbackContext {
 /** Displays mutation state without mounting queries that would trigger unrelated RPCs. */
 function BuyMutation({
   options,
+  onCallSuccess,
 }: {
   readonly options: MutationOptions<{ id: string }, BuyResult, RollbackContext>;
+  readonly onCallSuccess?: (
+    data: BuyResult,
+    input: { id: string },
+    context: RollbackContext | undefined,
+  ) => void;
 }) {
   const buy = api.shop.buy.useMutation(options);
   return (
@@ -169,7 +185,7 @@ function BuyMutation({
       <button
         type="button"
         onClick={() => {
-          buy.mutate({ id: 'a' });
+          buy.mutate({ id: 'a' }, { ...(onCallSuccess ? { onSuccess: onCallSuccess } : {}) });
         }}
       >
         Buy
@@ -179,71 +195,87 @@ function BuyMutation({
 }
 
 describe('mutation callbacks', () => {
-  it('awaits onMutate before sending and passes its context through awaited success callbacks', async () => {
-    const prepared = Promise.withResolvers<RollbackContext>();
-    const succeeded = Promise.withResolvers<undefined>();
-    const settled = Promise.withResolvers<undefined>();
-    const rollback = { previousStock: 3 };
-    const result = { ok: true, left: 2 };
-    const onMutate = vi.fn(() => prepared.promise);
-    const onSuccess = vi.fn(() => succeeded.promise);
-    const onError = vi.fn();
-    const onSettled = vi.fn(() => settled.promise);
-    const { socket, queryClient } = renderWithPetal(
-      <BuyMutation options={{ onMutate, onSuccess, onError, onSettled }} />,
-    );
-    const mutationContext: unknown = expect.objectContaining({ client: queryClient });
+  it.each([false, true])(
+    'awaits callback context for success or returned failure (%s)',
+    async (failure) => {
+      const prepared = Promise.withResolvers<RollbackContext>();
+      const succeeded = Promise.withResolvers<undefined>();
+      const onCallSuccess = vi.fn();
+      const settled = Promise.withResolvers<undefined>();
+      const rollback = { previousStock: 3 };
+      const result = failure
+        ? { ok: false, reason: 'custom', error: { code: 'sold-out', itemId: 'a' } }
+        : { ok: true, left: 2 };
+      const onMutate = vi.fn(() => prepared.promise);
+      const onSuccess = vi.fn(() => succeeded.promise);
+      const onError = vi.fn();
+      const onSettled = vi.fn(() => settled.promise);
+      const { socket, queryClient } = renderWithPetal(
+        <BuyMutation
+          options={{ onMutate, onSuccess, onError, onSettled }}
+          onCallSuccess={onCallSuccess}
+        />,
+      );
+      const mutationContext: unknown = expect.objectContaining({ client: queryClient });
 
-    await userEvent.click(screen.getByRole('button', { name: 'Buy' }));
-    expect(onMutate).toHaveBeenCalledExactlyOnceWith({ id: 'a' }, mutationContext);
-    expect(calls(socket, 'shop.buy')).toBe(0);
-    expect(screen.getByTestId('mutation-status').textContent).toBe('pending');
+      await userEvent.click(screen.getByRole('button', { name: 'Buy' }));
+      expect(onMutate).toHaveBeenCalledExactlyOnceWith({ id: 'a' }, mutationContext);
+      expect(calls(socket, 'shop.buy')).toBe(0);
+      expect(screen.getByTestId('mutation-status').textContent).toBe('pending');
 
-    await act(async () => {
-      prepared.resolve(rollback);
-      await prepared.promise;
-    });
-    await waitFor(() => {
-      expect(calls(socket, 'shop.buy')).toBe(1);
-    });
-    act(() => {
-      socket.answer('rpc', result, (message) => message.name === 'shop.buy');
-    });
-    await waitFor(() => {
-      expect(onSuccess).toHaveBeenCalledExactlyOnceWith(
+      await act(async () => {
+        prepared.resolve(rollback);
+        await prepared.promise;
+      });
+      await waitFor(() => {
+        expect(calls(socket, 'shop.buy')).toBe(1);
+      });
+      act(() => {
+        socket.answer('rpc', result, (message) => message.name === 'shop.buy');
+      });
+      await waitFor(() => {
+        expect(onSuccess).toHaveBeenCalledExactlyOnceWith(
+          result,
+          { id: 'a' },
+          rollback,
+          mutationContext,
+        );
+      });
+      expect(onSettled).not.toHaveBeenCalled();
+      expect(onCallSuccess).not.toHaveBeenCalled();
+      expect(screen.getByTestId('mutation-status').textContent).toBe('pending');
+
+      await act(async () => {
+        succeeded.resolve(undefined);
+        await succeeded.promise;
+      });
+      await waitFor(() => {
+        expect(onSettled).toHaveBeenCalledExactlyOnceWith(
+          result,
+          null,
+          { id: 'a' },
+          rollback,
+          mutationContext,
+        );
+      });
+      expect(screen.getByTestId('mutation-status').textContent).toBe('pending');
+
+      await act(async () => {
+        settled.resolve(undefined);
+        await settled.promise;
+      });
+      await waitFor(() => {
+        expect(screen.getByTestId('mutation-status').textContent).toBe('success');
+      });
+      expect(onCallSuccess).toHaveBeenCalledExactlyOnceWith(
         result,
         { id: 'a' },
         rollback,
         mutationContext,
       );
-    });
-    expect(onSettled).not.toHaveBeenCalled();
-    expect(screen.getByTestId('mutation-status').textContent).toBe('pending');
-
-    await act(async () => {
-      succeeded.resolve(undefined);
-      await succeeded.promise;
-    });
-    await waitFor(() => {
-      expect(onSettled).toHaveBeenCalledExactlyOnceWith(
-        result,
-        null,
-        { id: 'a' },
-        rollback,
-        mutationContext,
-      );
-    });
-    expect(screen.getByTestId('mutation-status').textContent).toBe('pending');
-
-    await act(async () => {
-      settled.resolve(undefined);
-      await settled.promise;
-    });
-    await waitFor(() => {
-      expect(screen.getByTestId('mutation-status').textContent).toBe('success');
-    });
-    expect(onError).not.toHaveBeenCalled();
-  });
+      expect(onError).not.toHaveBeenCalled();
+    },
+  );
 
   it('passes rollback context to onError and waits for it before onSettled', async () => {
     const handled = Promise.withResolvers<undefined>();
@@ -338,7 +370,7 @@ describe('mutation callbacks', () => {
     'uses the resolved lifecycle for a failed Result without a success toast (error toast: %s)',
     async (showErrorToast) => {
       const rollback = { previousStock: 3 };
-      const result = { ok: false, reason: 'not-found', message: 'Sold out' };
+      const result = { ok: false, reason: 'custom', error: { code: 'sold-out', itemId: 'a' } };
       const success = vi.fn(() => ({ title: 'Purchase succeeded' }));
       const onSuccess = vi.fn();
       const onError = vi.fn();
@@ -390,4 +422,110 @@ describe('mutation callbacks', () => {
       }
     },
   );
+});
+
+describe('failure presentation', () => {
+  it.each(['default', 'explicit', 'fallback', 'silent', 'rejected'] as const)(
+    'uses %s presentation without exposing diagnostics',
+    async (mode) => {
+      const presenter = vi.fn((failure: Extract<BuyResult, { ok: false }>) =>
+        mode === 'fallback' ? undefined : `Item ${failure.error.itemId} is sold out.`,
+      );
+      const error = vi.fn((problem: { message: string }) => ({
+        title: 'Could not buy',
+        description: problem.message,
+      }));
+      const { socket } = renderWithPetal(
+        <BuyMutation
+          options={{
+            ...(mode === 'silent' ? {} : { error }),
+            ...(mode === 'default' ? {} : { presentFailure: presenter }),
+            success: 'never',
+          }}
+        />,
+      );
+      await userEvent.click(screen.getByRole('button', { name: 'Buy' }));
+      act(() => {
+        if (mode === 'rejected') socket.fail('rpc', 'forbidden', 'Not allowed');
+        else
+          socket.answer('rpc', {
+            ok: false,
+            reason: 'custom',
+            error: { code: 'sold-out', itemId: 'a' },
+            message: 'DIAGNOSTIC_ONLY',
+          });
+      });
+      await waitFor(() => {
+        expect(screen.getByTestId('mutation-status').textContent).toBe(
+          mode === 'rejected' ? 'error' : 'success',
+        );
+      });
+      if (mode === 'silent') {
+        expect(error).not.toHaveBeenCalled();
+        expect(presenter).not.toHaveBeenCalled();
+      } else {
+        const message =
+          mode === 'rejected'
+            ? 'Not allowed'
+            : mode === 'explicit'
+              ? 'Item a is sold out.'
+              : 'The action could not be completed.';
+        expect(await screen.findByText(message)).toBeTruthy();
+        if (mode !== 'rejected') expect(error).toHaveBeenCalledExactlyOnceWith({ message });
+        else expect(presenter).not.toHaveBeenCalled();
+      }
+      expect(screen.queryByText('DIAGNOSTIC_ONLY')).toBeNull();
+      expect(screen.queryByText('never')).toBeNull();
+    },
+  );
+});
+
+function OrdinaryMutation() {
+  const scalar = api.shop.scalar.useMutation({
+    success: 'Scalar succeeded',
+    error: 'Scalar failed',
+  });
+  const broadcast = api.shop.broadcast.useMutation({
+    success: 'Broadcast returned',
+    error: 'Broadcast failed',
+  });
+  return (
+    <Toaster>
+      <button
+        type="button"
+        onClick={() => {
+          scalar.mutate();
+        }}
+      >
+        Scalar
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          broadcast.mutate();
+        }}
+      >
+        Broadcast
+      </button>
+    </Toaster>
+  );
+}
+
+it('does not interpret scalar or nested Result outputs as top-level failures', async () => {
+  const { socket } = renderWithPetal(<OrdinaryMutation />);
+  await userEvent.click(screen.getByRole('button', { name: 'Scalar' }));
+  act(() => {
+    socket.answer('rpc', 3, (message) => message.name === 'shop.scalar');
+  });
+  expect(await screen.findByText('Scalar succeeded')).toBeTruthy();
+  await userEvent.click(screen.getByRole('button', { name: 'Broadcast' }));
+  act(() => {
+    socket.answer(
+      'rpc',
+      { one: { ok: false, reason: 'custom', error: { code: 'sold-out', itemId: 'a' } } },
+      (message) => message.name === 'shop.broadcast',
+    );
+  });
+  expect(await screen.findByText('Broadcast returned')).toBeTruthy();
+  expect(screen.queryByText('Broadcast failed')).toBeNull();
 });
