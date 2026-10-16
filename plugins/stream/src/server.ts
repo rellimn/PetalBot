@@ -19,8 +19,6 @@ import { RECENT_LIMIT } from './limits.ts';
 export default definePlugin(streamContract, {
   setup(ctx) {
     const providers = ctx.providers('stream.platform');
-    /** Live status per connection: from the info, then from online/offline pushes. */
-    const status = new Map<string, ConnectionStatus>();
     let recent: Activity[] = [];
 
     const fromInfo = (info: { live: boolean; since?: number | undefined }): ConnectionStatus =>
@@ -28,13 +26,9 @@ export default definePlugin(streamContract, {
         ? { live: true, since: info.since }
         : { live: info.live };
 
-    // Connections that are already there when stream (re)starts keep their status.
-    for (const provider of providers.list()) status.set(provider.key, fromInfo(provider.info));
-
-    providers.onChange(({ key, change }) => {
-      const provider = providers.get(key);
-      if (change === 'removed' || !provider) status.delete(key);
-      else status.set(key, fromInfo(provider.info));
+    // The info is the only source of the live status: it survives a restart of stream and
+    // can't be overtaken by queued pushes. Platforms update it on every transition.
+    providers.onChange(() => {
       ctx.emit('stream.connectionsChanged', {});
     });
 
@@ -68,13 +62,6 @@ export default definePlugin(streamContract, {
     providers.on('event', (pushed, provider) => {
       const event: StreamEvent = { ...pushed, source: sourceOf(provider.key) };
       const now = Date.now();
-      const current = status.get(provider.key);
-      if (event.type === 'online') {
-        // A repeated online (a redelivery) keeps the start time it already has.
-        const since = event.since ?? (current?.live ? (current.since ?? now) : now);
-        status.set(provider.key, { live: true, since });
-      }
-      if (event.type === 'offline') status.set(provider.key, { live: false });
       recent = [{ id: randomUUID(), timestamp: now, event }, ...recent].slice(0, RECENT_LIMIT);
       announce(event);
     });
@@ -83,12 +70,7 @@ export default definePlugin(streamContract, {
       rpc: {
         recent: () => recent,
         status: () =>
-          Object.fromEntries(
-            providers.list().flatMap(({ key }) => {
-              const entry = status.get(key);
-              return entry ? [[key, entry]] : [];
-            }),
-          ),
+          Object.fromEntries(providers.list().map(({ key, info }) => [key, fromInfo(info)])),
       },
     };
   },

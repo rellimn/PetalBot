@@ -37,10 +37,11 @@ Both are queries exposed to the panel (`mod`).
    connection id; `info` is `{ channel, displayName, live?, since? }`: pass `live: true` (and
    `since`) when the stream is already running. No methods yet.
 2. `conn.push('event', { type, ... })`, e.g. `{ type: 'follow', user }`. Stream adds `source` from
-   the key and emits `stream.<type>` without `type`. Pass the platform's start time as `since` with
-   `online`; a repeated `online` keeps the first one. Stream doesn't de-duplicate events: the
+   the key and emits `stream.<type>` without `type`. Stream doesn't de-duplicate events: the
    platform must (Twitch: by EventSub message id).
-3. `conn.update(info)` replaces the info; its `live`/`since` become the connection's status.
+3. `conn.update(info)` replaces the info. **The info is the only source of the live status:** on
+   every transition, call `update` with `live`/`since` (the platform's start time) besides pushing
+   `online`/`offline`, which are events only. The status then survives a restart of `stream`.
 
 A connection exists as long as its provider does, and survives a restart of `stream`.
 

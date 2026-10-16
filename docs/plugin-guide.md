@@ -673,8 +673,10 @@ conn.update({ channel: login, displayName, isDefault: false });
   plugin, removes the connection. A restart of the domain keeps it: there is nothing to register
   again.
 - **`stream` works the same way:** `ctx.provide('stream.platform', key, { info: { channel,
-  displayName, live?, since? } })` and `conn.push('event', { type: 'follow', user })`. The domain
-  doesn't de-duplicate stream events; the platform must.
+  displayName, live?, since? } })` and `conn.push('event', { type: 'follow', user })`. The live
+  status comes from the info only: on every transition call `conn.update({ ..., live, since })`
+  besides pushing `online`/`offline`. The domain doesn't de-duplicate stream events; the platform
+  must.
 
 ### Owning a provider slot
 

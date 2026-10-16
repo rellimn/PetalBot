@@ -84,31 +84,28 @@ describe('stream', () => {
     await harness.stop();
   });
 
-  it('tracks whether each connection is live', async () => {
+  it('takes live status from the info, not from pushes', async () => {
     const harness = await connected();
+    harness.provided.push('event', { type: 'online', since: 4_000 });
+    await harness.idle();
+    // The push is an event; the platform reports the status with update.
     await expect(harness.call('stream.status')).resolves.toEqual({
       'twitch:roman': { live: false },
     });
-    harness.provided.push('event', { type: 'online' });
-    await harness.idle();
+    harness.provided.update({ ...twitch, live: true, since: 4_000 });
     await expect(harness.call('stream.status')).resolves.toEqual({
-      'twitch:roman': { live: true, since: 10_000 },
-    });
-    harness.provided.push('event', { type: 'offline' });
-    await harness.idle();
-    await expect(harness.call('stream.status')).resolves.toEqual({
-      'twitch:roman': { live: false },
+      'twitch:roman': { live: true, since: 4_000 },
     });
     await harness.stop();
   });
 
-  it("takes the platform's start time and keeps it on a repeated online", async () => {
-    const harness = await connected();
-    harness.provided.push('event', { type: 'online', since: 4_000 });
+  it('keeps the status a platform reported when a push arrives after the update', async () => {
+    const harness = await connected({ live: true, since: 4_000 });
     harness.provided.push('event', { type: 'online' });
+    harness.provided.update({ ...twitch, live: false });
     await harness.idle();
     await expect(harness.call('stream.status')).resolves.toEqual({
-      'twitch:roman': { live: true, since: 4_000 },
+      'twitch:roman': { live: false },
     });
     await harness.stop();
   });
