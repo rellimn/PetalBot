@@ -632,7 +632,9 @@ export default definePlugin(greeterContract, {
 
 A platform plugin depends on `chat` and/or `stream` (usually as **required** dependencies: it does
 nothing useful without them) and **provides** one registration per connection. The key is the
-connection id, `<platform>:<channel>`; the domain reads the platform from it.
+connection id, `<platform>:<channel>`; the domain reads the platform from it. The reference
+implementation is [`plugins/twitch`](../plugins/twitch/README.md): one adapter module wraps the
+platform library, so everything else is tested against a fake of it.
 
 ```ts
 const conn = ctx.provide('chat.platform', `twitch:${login}`, {
@@ -676,7 +678,7 @@ conn.update({ channel: login, displayName, isDefault: false });
   displayName, live?, since? } })` and `conn.push('event', { type: 'follow', user })`. The live
   status comes from the info only: on every transition call `conn.update({ ..., live, since })`
   besides pushing `online`/`offline`. The domain doesn't de-duplicate stream events; the platform
-  must.
+  must (or its library does: Twurple drops repeated EventSub messages for `twitch`).
 
 ### Owning a provider slot
 
