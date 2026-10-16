@@ -23,3 +23,5 @@ export type {
 export * from './codecs.ts';
 export * from './choice.ts';
 export * from './rate-limiter.ts';
+export * from './platform.ts';
+export * from './actor.ts';
