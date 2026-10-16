@@ -60,11 +60,14 @@ export function createTwitchPlugin(createClient: TwitchClientFactory) {
         if (!app || !broadcaster) return undefined;
         const broadcasterToken = await ctx.secrets.get('tokens', broadcaster.id);
         if (!broadcasterToken) return undefined;
+        const { bot } = accounts;
+        const botToken = bot ? await ctx.secrets.get('tokens', bot.id) : undefined;
         return await startRuntime({
           ctx,
           client: newClient(app),
           broadcaster,
-          tokens: { broadcaster: broadcasterToken },
+          ...(bot && botToken ? { bot } : {}),
+          tokens: { broadcaster: broadcasterToken, ...(botToken ? { bot: botToken } : {}) },
           onChange: changed,
         });
       };

@@ -5,8 +5,12 @@
  *
  * Stream (broadcaster only): `stream.platform` keyed `twitch:<login>`, events pushed as they
  * arrive, the live status in the info (spec §24.10: `update` on every transition).
+ *
+ * Chat (with a bot): `chat.platform` under the same key, sending through a rate limiter sized by
+ * the bot's role (moderator or VIP: 100 per 30 s; otherwise 20 per 30 s, one per second), which
+ * follows the channel's moderator and VIP events.
  */
-import { sourceOf, type PluginContext } from '@petalbot/sdk';
+import { createRateLimiter, sourceOf, type PluginContext } from '@petalbot/sdk';
 import type { chatContract } from '@petalbot-plugin/chat/contract';
 import type { InboundStreamEvent, streamContract } from '@petalbot-plugin/stream/contract';
 import type {
@@ -17,7 +21,9 @@ import type {
   TwitchToken,
   twitchContract,
 } from './contract.ts';
+import { createChatMethods } from './chat-provider.ts';
 import * as map from './mapping.ts';
+import { CHAT_MAX_QUEUE, CHAT_MAX_WAIT_MS, CHAT_WINDOW_MS, chatLimits } from './scopes.ts';
 import type { TwitchClient, TwitchEventHandlers } from './twitch-client.ts';
 
 export type TwitchContext = PluginContext<
@@ -57,6 +63,8 @@ export async function startRuntime(input: RuntimeInput): Promise<Runtime> {
   const status: RuntimeStatus = { eventSub: { broadcaster: 'off', bot: 'off' }, botRole: null };
 
   client.addUser(broadcaster.id, input.tokens.broadcaster);
+  const bot = input.bot && input.tokens.bot ? input.bot : undefined;
+  if (bot && input.tokens.bot) client.addUser(bot.id, input.tokens.bot);
 
   // Helix failures here must not keep the stream side down: start offline and let
   // stream.online correct it.
@@ -84,6 +92,8 @@ export async function startRuntime(input: RuntimeInput): Promise<Runtime> {
         });
       }
     };
+  const chat = bot ? await startChat(input, bot, key, status) : undefined;
+
   const push = (event: InboundStreamEvent | null): void => {
     if (event) stream.push('event', event);
   };
@@ -121,22 +131,92 @@ export async function startRuntime(input: RuntimeInput): Promise<Runtime> {
         message: event.message,
       });
     }),
-    roleChanged: () => undefined,
-    chatMessage: () => undefined,
-    chatMessageDeleted: () => undefined,
+    roleChanged: guarded('roleChanged', (event) => {
+      if (chat?.roleChanged(event)) onChange();
+    }),
+    chatMessage: guarded('chatMessage', (event) => {
+      if (chat && bot)
+        chat.provided.push('message', map.toInboundMessage(event, bot.id, Date.now()));
+    }),
+    chatMessageDeleted: guarded('chatMessageDeleted', (event) => {
+      chat?.provided.push('messageDeleted', { messageId: event.messageId });
+    }),
     socket: guarded('socket', ({ kind, state }) => {
       status.eventSub[kind] = state;
       onChange();
     }),
   };
-  const listener = client.listen({ broadcasterId: broadcaster.id }, handlers);
+  const listener = client.listen(
+    bot ? { broadcasterId: broadcaster.id, botId: bot.id } : { broadcasterId: broadcaster.id },
+    handlers,
+  );
 
   return {
     status,
     dispose() {
       listener.stop();
+      chat?.dispose();
       stream.dispose();
       return Promise.resolve();
+    },
+  };
+}
+
+/** The chat side: the bot's role, the limiter and the `chat.platform` provider. */
+async function startChat(
+  input: RuntimeInput,
+  bot: TwitchAccount,
+  key: string,
+  status: RuntimeStatus,
+) {
+  const { ctx, client, broadcaster } = input;
+  let initial: BotRole = 'none';
+  try {
+    initial = await client.botRole(broadcaster.id, bot.id);
+  } catch (error) {
+    ctx.log.warn('Could not read the bot role; assuming a plain chatter', {
+      error: errorText(error),
+    });
+  }
+  const roles = { moderator: initial === 'moderator', vip: initial === 'vip' };
+  const roleOf = (): BotRole => (roles.moderator ? 'moderator' : roles.vip ? 'vip' : 'none');
+  status.botRole = roleOf();
+
+  const limiter = createRateLimiter({
+    ...chatLimits(status.botRole),
+    windowMs: CHAT_WINDOW_MS,
+    maxQueue: CHAT_MAX_QUEUE,
+    maxWaitMs: CHAT_MAX_WAIT_MS,
+  });
+  const provided = ctx.provide('chat.platform', key, {
+    info: { channel: broadcaster.login, displayName: broadcaster.displayName, isDefault: true },
+    methods: createChatMethods({
+      key,
+      client,
+      broadcasterId: broadcaster.id,
+      botId: bot.id,
+      limiter,
+    }),
+  });
+
+  return {
+    provided,
+    /** Applies a role event; true when the bot's role changed. */
+    roleChanged(event: { userId: string; role: 'moderator' | 'vip'; added: boolean }): boolean {
+      if (event.userId !== bot.id) return false;
+      const before = roleOf();
+      roles[event.role] = event.added;
+      const after = roleOf();
+      if (after === before) return false;
+      const limits = chatLimits(after);
+      limiter.setLimit(limits.limit);
+      limiter.setMinInterval(limits.minIntervalMs);
+      status.botRole = after;
+      return true;
+    },
+    dispose(): void {
+      limiter.dispose();
+      provided.dispose();
     },
   };
 }
