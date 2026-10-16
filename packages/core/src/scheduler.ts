@@ -1,5 +1,6 @@
 import { Cron } from 'croner';
 import type { ScheduleApi, ScheduledTask } from '@petalbot/sdk';
+import { outsideActor } from './actor-scope.ts';
 import { once } from './disposer-scope.ts';
 import { runInPlugin } from './plugin-scope.ts';
 
@@ -10,14 +11,18 @@ export interface SchedulerOptions {
 }
 
 export function createScheduler(options: SchedulerOptions): ScheduleApi {
+  // A timer armed during a call must not act for that call's actor forever: tasks run as the
+  // plugin itself.
   const invoke = (task: ScheduledTask): Promise<void> =>
-    runInPlugin(options.pluginId, async () => {
-      try {
-        await task();
-      } catch (error) {
-        options.onError(error);
-      }
-    });
+    outsideActor(() =>
+      runInPlugin(options.pluginId, async () => {
+        try {
+          await task();
+        } catch (error) {
+          options.onError(error);
+        }
+      }),
+    );
 
   /** Skips a tick while the previous run of the same job is still in progress. */
   const exclusive = (task: ScheduledTask) => {

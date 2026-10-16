@@ -132,4 +132,44 @@ describe('the actor', () => {
     expect(envelopes[0]).not.toHaveProperty('actor');
     expect(seen[0]?.actor).toEqual({ kind: 'plugin', pluginId: 'listener' });
   });
+
+  it("does not hand a caller's actor to timers armed during the call", async () => {
+    const kernel = new Kernel({ logger: createMemoryLogger() });
+    const seen: Seen[] = [];
+    await kernel.start(
+      definePlugin(leafContract, {
+        setup: () => ({
+          rpc: {
+            whoami: (_input, { caller, who, actor }) => {
+              seen.push({ caller, who, actor });
+              return {};
+            },
+          },
+        }),
+      }),
+    );
+    await kernel.start(
+      definePlugin(middleContract, {
+        dependencies: [leafContract],
+        setup(ctx) {
+          return {
+            rpc: {
+              forward: () => {
+                ctx.schedule.after(1, async () => {
+                  await ctx.call('leaf.whoami');
+                });
+                return {};
+              },
+              announce: () => ({}),
+            },
+          };
+        },
+      }),
+    );
+    await kernel.callFromClient('middle.forward', undefined, { kind: 'panel', user: mia });
+    await delay(20);
+    expect(seen).toEqual([
+      { caller: 'middle', who: 'middle', actor: { kind: 'plugin', pluginId: 'middle' } },
+    ]);
+  });
 });

@@ -135,6 +135,9 @@ fail with `PluginUnavailableError`. Each implementation gets `(input, { caller, 
   `{ kind: 'overlay', instanceId }`, `{ kind: 'plugin', pluginId }`, `{ kind: 'viewer', viewer }`
   or `{ kind: 'flow', flowId, name }`. It travels along nested calls, hooks and the events they
   emit (envelopes carry `actor` too); a plugin acting on its own is the actor of its calls.
+- Tasks of `ctx.schedule` run as the plugin itself, also when armed during a call. Timers,
+  sockets and callbacks a plugin creates by hand inherit the actor of the code that created them,
+  so create long-lived ones in `setup` or use `ctx.schedule`.
 - `via` names what acted on the actor's behalf (`{ kind: 'flow', flowId, name, runId }`), if anything.
 - `who` is `describeActor(actor)`: the user's or viewer's name, `'overlay'`, a plugin id or a flow name.
 
