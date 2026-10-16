@@ -320,3 +320,40 @@ describe('defineContract failure codes', () => {
     }).toThrow(message);
   });
 });
+
+describe('defineContract timeouts', () => {
+  const withTimeout = (timeoutMs: number): ContractShape => ({
+    id: 'a',
+    version: '1.0.0',
+    rpc: { x: { output: z.object({}), timeoutMs } },
+  });
+
+  it('accepts timeouts from 1 to 120000 ms on RPCs and provider methods', () => {
+    expect(() => {
+      checkContract(withTimeout(0));
+    }).toThrow(/timeoutMs/);
+    expect(() => {
+      checkContract(withTimeout(120_001));
+    }).toThrow(/timeoutMs/);
+    expect(() => {
+      checkContract(withTimeout(1.5));
+    }).toThrow(/timeoutMs/);
+    expect(() => {
+      checkContract(withTimeout(120_000));
+    }).not.toThrow();
+    expect(() => {
+      checkContract(withTimeout(1));
+    }).not.toThrow();
+    const provider = (timeoutMs: number): ContractShape => ({
+      id: 'a',
+      version: '1.0.0',
+      providers: { p: { m: { input: z.object({}), output: z.object({}), timeoutMs } } },
+    });
+    expect(() => {
+      checkContract(provider(0));
+    }).toThrow(/timeoutMs/);
+    expect(() => {
+      checkContract(provider(5000));
+    }).not.toThrow();
+  });
+});

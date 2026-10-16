@@ -45,6 +45,8 @@ export interface KernelOptions {
   readonly health?: PluginHealthOptions;
   readonly hookTimeoutMs?: number;
   readonly rpcTimeoutMs?: number;
+  /** Default timeout of provider calls (slot methods may declare their own). Default 5000 ms. */
+  readonly providerTimeoutMs?: number;
   readonly maxEventDepth?: number;
   /** The instance's public URL; `ctx.http.url` builds on it. Default `http://localhost:8080`. */
   readonly publicUrl?: string;
@@ -112,7 +114,10 @@ export class Kernel {
       contracts: this.#contracts,
       ...(options.rpcTimeoutMs === undefined ? {} : { timeoutMs: options.rpcTimeoutMs }),
     });
-    this.#providers = new ProviderRegistry(this.#contracts);
+    this.#providers = new ProviderRegistry({
+      contracts: this.#contracts,
+      ...(options.providerTimeoutMs === undefined ? {} : { timeoutMs: options.providerTimeoutMs }),
+    });
     this.routes = new PluginRouteTable({
       onError: (pluginId, error) => {
         this.#logger.error('Plugin route failed', { plugin: pluginId, error: errorMessage(error) });

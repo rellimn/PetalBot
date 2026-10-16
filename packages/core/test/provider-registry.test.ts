@@ -1,9 +1,10 @@
 import { fail, defineFailure, Result } from '@petalbot/sdk';
 import { late, resultContract, timestamp } from './result-fixture.ts';
 import { z } from 'zod';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   AccessError,
+  ProviderTimeoutError,
   UnsupportedCapabilityError,
   ValidationError,
   defineContract,
@@ -102,7 +103,7 @@ describe('ProviderRegistry', () => {
   it("validates against the slot owner's running contract, not the one seen at registration", async () => {
     const contracts = new ContractRegistry();
     const unregister = contracts.register(counterContract);
-    const registry = new ProviderRegistry(contracts);
+    const registry = new ProviderRegistry({ contracts });
     registry.register('twitch', SLOT, slotDef, 'twitch:roman', { write });
     unregister();
     contracts.register(
@@ -167,7 +168,7 @@ describe('provider Result boundaries', () => {
   it('decodes failures using the running owner contract, including after replacement', async () => {
     const contracts = new ContractRegistry();
     const unregister = contracts.register(resultContract);
-    const registry = new ProviderRegistry(contracts);
+    const registry = new ProviderRegistry({ contracts });
     registry.register('source', 'clock.source', resultContract.providers.source, 'one', {
       read: () => Promise.resolve(fail(late, { at: timestamp })),
     });
@@ -202,5 +203,33 @@ describe('provider Result boundaries', () => {
     await expect(registry.view('clock.source').get('one')?.call('read', {})).rejects.toBeInstanceOf(
       ValidationError,
     );
+  });
+
+  it('times out provider calls after the method timeout or the default', async () => {
+    vi.useFakeTimers();
+    try {
+      const slow = {
+        send: { input: z.object({}), output: z.object({}), timeoutMs: 12_000 },
+        ping: { input: z.object({}), output: z.object({}) },
+      };
+      const registry = new ProviderRegistry();
+      const never = () => new Promise<never>(() => undefined);
+      registry.register('twitch', 'chat.platform', slow, 'twitch:roman', {
+        send: never,
+        ping: never,
+      });
+      const handle = registry.view('chat.platform').get('twitch:roman');
+      const send = handle?.call('send', {});
+      const sendFailed = expect(send).rejects.toBeInstanceOf(ProviderTimeoutError);
+      await vi.advanceTimersByTimeAsync(11_999);
+      await vi.advanceTimersByTimeAsync(1);
+      await sendFailed;
+      const ping = handle?.call('ping', {});
+      const pingFailed = expect(ping).rejects.toThrow('within 5000 ms');
+      await vi.advanceTimersByTimeAsync(5_000);
+      await pingFailed;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

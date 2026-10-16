@@ -2,12 +2,13 @@ import { z } from 'zod';
 import { fail } from '@petalbot/sdk';
 import { ProviderRegistry } from '../src/provider-registry.ts';
 import { late, LateResult, resultContract, timestamp } from './result-fixture.ts';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   AccessError,
   PluginUnavailableError,
   RpcTimeoutError,
   ValidationError,
+  defineContract,
   type RpcMeta,
 } from '@petalbot/sdk';
 import { ContractRegistry } from '../src/contract-registry.ts';
@@ -95,7 +96,7 @@ describe('RPC Result boundaries', () => {
   it('decodes failures and forwards decoded provider details through the schema input', async () => {
     const contracts = new ContractRegistry();
     contracts.register(resultContract);
-    const providers = new ProviderRegistry(contracts);
+    const providers = new ProviderRegistry({ contracts });
     providers.register('source', 'clock.source', resultContract.providers.source, 'one', {
       read: () => Promise.resolve(fail(late, { at: timestamp })),
     });
@@ -129,5 +130,34 @@ describe('RPC Result boundaries', () => {
     await expect(rpc.call('consumer', 'clock.read', undefined)).rejects.toBeInstanceOf(
       ValidationError,
     );
+  });
+
+  it("uses the contract's timeout unless the caller passes one", async () => {
+    vi.useFakeTimers();
+    try {
+      const contracts = new ContractRegistry();
+      contracts.register(
+        defineContract({
+          id: 'quotes',
+          version: '1.0.0',
+          rpc: { slow: { output: z.object({}), timeoutMs: 8000 } },
+        }),
+      );
+      const rpc = new RpcRouter({ contracts });
+      rpc.register('quotes.slow', () => new Promise(() => undefined));
+      const byContract = rpc.call('other', 'quotes.slow', undefined);
+      const settled = vi.fn();
+      byContract.catch(settled);
+      await vi.advanceTimersByTimeAsync(7_999);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(byContract).rejects.toThrow('timed out after 8000 ms');
+      const byCaller = rpc.call('other', 'quotes.slow', undefined, { timeoutMs: 100 });
+      const caught = expect(byCaller).rejects.toThrow('timed out after 100 ms');
+      await vi.advanceTimersByTimeAsync(100);
+      await caught;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

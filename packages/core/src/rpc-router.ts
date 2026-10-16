@@ -66,7 +66,7 @@ export class RpcRouter {
     const handler = this.#handlers.get(name);
     if (!handler) throw new PluginUnavailableError(owner);
     const parsedInput = parseOrThrow(rpc.def.input ?? NO_INPUT, input, `input of "${name}"`);
-    const timeoutMs = options.timeoutMs ?? this.#timeoutMs;
+    const timeoutMs = options.timeoutMs ?? rpc.def.timeoutMs ?? this.#timeoutMs;
     const client = options.client;
     const who =
       client === undefined ? caller : client.kind === 'panel' ? client.user.name : 'overlay';

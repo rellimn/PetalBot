@@ -48,6 +48,7 @@ const FROM_SDK: Readonly<Record<ErrorCode, WireErrorCode>> = {
   validation: 'validation',
   'plugin-unavailable': 'unavailable',
   'rpc-timeout': 'timeout',
+  'provider-timeout': 'timeout',
   'unsupported-capability': 'unavailable',
   'contract-version': 'conflict',
   'access-denied': 'forbidden',

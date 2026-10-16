@@ -30,6 +30,8 @@ export interface RpcDef<I extends z.ZodType = z.ZodType, O extends z.ZodType = z
   readonly input?: I;
   readonly output: O;
   readonly expose?: { readonly panel?: Role; readonly overlay?: boolean };
+  /** How long callers wait by default (1 to 120000 ms; default 5000). A caller's option wins. */
+  readonly timeoutMs?: number;
 }
 
 export interface ProviderMethodDef<
@@ -38,6 +40,8 @@ export interface ProviderMethodDef<
 > {
   readonly input: I;
   readonly output: O;
+  /** How long the slot owner waits for the provider (1 to 120000 ms; default 5000). */
+  readonly timeoutMs?: number;
 }
 
 /** A dashboard widget. Its title, icon and component live in `definePanel`. */
@@ -267,10 +271,16 @@ export function checkContract(shape: ContractShape): void {
     }
   }
   for (const [member, def] of Object.entries(shape.rpc ?? {})) {
+    checkTimeout(shape, `RPC "${member}"`, def.timeoutMs);
     if (def.kind !== undefined && !RPC_KINDS.has(def.kind)) {
       throw new Error(
         `Invalid kind "${def.kind}" of RPC "${member}" in contract "${shape.id}" (expected "query" or "mutation")`,
       );
+    }
+  }
+  for (const [slot, methods] of Object.entries(shape.providers ?? {})) {
+    for (const [method, def] of Object.entries(methods)) {
+      checkTimeout(shape, `Provider method "${slot}.${method}"`, def.timeoutMs);
     }
   }
   for (const name of Object.keys(shape.widgets ?? {})) {
@@ -286,6 +296,17 @@ export function checkContract(shape: ContractShape): void {
   }
   checkChoices(shape);
   checkFailureCodes(shape);
+}
+
+const MAX_TIMEOUT_MS = 120_000;
+
+function checkTimeout(contract: ContractShape, what: string, timeoutMs: number | undefined): void {
+  if (timeoutMs === undefined) return;
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMEOUT_MS) {
+    throw new Error(
+      `${what} of contract "${contract.id}" has timeoutMs ${String(timeoutMs)} (expected an integer from 1 to ${String(MAX_TIMEOUT_MS)})`,
+    );
+  }
 }
 
 /**

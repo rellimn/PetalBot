@@ -1,5 +1,6 @@
 import {
   AccessError,
+  ProviderTimeoutError,
   UnsupportedCapabilityError,
   type ProviderChange,
   type ProviderHandle,
@@ -9,6 +10,7 @@ import {
 import type { ContractRegistry } from './contract-registry.ts';
 import { once } from './disposer-scope.ts';
 import { runInPlugin } from './plugin-scope.ts';
+import { withTimeout } from './timeout.ts';
 import { parseOrThrow } from './validate.ts';
 
 /**
@@ -24,14 +26,22 @@ interface Registration {
   readonly impl: RawProviderImpl;
 }
 
+export interface ProviderRegistryOptions {
+  /** With `contracts`, calls are validated against the slot owner's running contract. */
+  readonly contracts?: ContractRegistry;
+  /** Default timeout of provider calls; methods may declare their own. Default 5000 ms. */
+  readonly timeoutMs?: number;
+}
+
 export class ProviderRegistry {
   readonly #contracts: ContractRegistry | undefined;
+  readonly #timeoutMs: number;
   readonly #slots = new Map<string, Map<string, Registration>>();
   readonly #listeners = new Map<string, Set<(change: ProviderChange) => void>>();
 
-  /** With `contracts`, calls are validated against the slot owner's running contract. */
-  constructor(contracts?: ContractRegistry) {
-    this.#contracts = contracts;
+  constructor(options: ProviderRegistryOptions = {}) {
+    this.#contracts = options.contracts;
+    this.#timeoutMs = options.timeoutMs ?? 5000;
   }
 
   /** Registers `impl` under `key` in `slot` (qualified). Returns an idempotent disposer. */
@@ -74,7 +84,12 @@ export class ProviderRegistry {
       get: (key) => {
         const registration = this.#slots.get(slot)?.get(key);
         return registration
-          ? handleFor(slot, registration, () => this.#currentDef(slot) ?? registration.slotDef)
+          ? handleFor(
+              slot,
+              registration,
+              () => this.#currentDef(slot) ?? registration.slotDef,
+              this.#timeoutMs,
+            )
           : undefined;
       },
       onChange: (listener) => {
@@ -109,6 +124,7 @@ function handleFor(
   slot: string,
   registration: Registration,
   slotDefNow: () => ProviderSlotDef,
+  defaultTimeoutMs: number,
 ): ProviderHandle<ProviderSlotDef> {
   const { impl, key, pluginId } = registration;
   const members = impl as Readonly<Record<string, unknown>>;
@@ -128,8 +144,15 @@ function handleFor(
         throw new UnsupportedCapabilityError(slot, key, method);
       }
       const parsedInput = parseOrThrow(def.input, input, `input of "${slot}.${method}"`);
-      const output: unknown = await runInPlugin(pluginId, () =>
-        (fn as (input: unknown) => Promise<unknown>).call(impl, parsedInput),
+      const timeoutMs = def.timeoutMs ?? defaultTimeoutMs;
+      const output: unknown = await withTimeout(
+        Promise.resolve().then(() =>
+          runInPlugin(pluginId, () =>
+            (fn as (input: unknown) => Promise<unknown>).call(impl, parsedInput),
+          ),
+        ),
+        timeoutMs,
+        () => new ProviderTimeoutError(slot, key, method, timeoutMs),
       );
       return parseOrThrow(def.output, output, `output of "${key}" for "${slot}.${method}"`);
     },

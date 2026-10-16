@@ -4,6 +4,7 @@ export type ErrorCode =
   | 'validation'
   | 'plugin-unavailable'
   | 'rpc-timeout'
+  | 'provider-timeout'
   | 'unsupported-capability'
   | 'contract-version'
   | 'access-denied';
@@ -43,6 +44,16 @@ export class PluginUnavailableError extends PetalBotError {
 export class RpcTimeoutError extends PetalBotError {
   constructor(name: string, timeoutMs: number) {
     super('rpc-timeout', `RPC "${name}" timed out after ${String(timeoutMs)} ms`);
+  }
+}
+
+/** A provider did not answer in time. The call may still complete afterwards. */
+export class ProviderTimeoutError extends PetalBotError {
+  constructor(slot: string, key: string, method: string, timeoutMs: number) {
+    super(
+      'provider-timeout',
+      `Provider "${key}" of "${slot}" did not answer "${method}" within ${String(timeoutMs)} ms`,
+    );
   }
 }
 
