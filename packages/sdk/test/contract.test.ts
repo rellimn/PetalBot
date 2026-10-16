@@ -357,3 +357,49 @@ describe('defineContract timeouts', () => {
     }).not.toThrow();
   });
 });
+
+describe('defineContract flow marks', () => {
+  const base = { id: 'a', version: '1.0.0' } as const;
+  const event = (flow: unknown) =>
+    ({
+      ...base,
+      events: { raid: { schema: z.object({ from: z.string() }), flow } },
+    }) as ContractShape;
+
+  it('checks labels and filters of events', () => {
+    expect(() => {
+      checkContract(event({ label: ' ' }));
+    }).toThrow(/label/);
+    expect(() => {
+      checkContract(event({ label: 'Raid', filter: ['to'] }));
+    }).toThrow(/filter "to"/);
+    expect(() => {
+      checkContract(event({ label: 'Raid', filter: ['from', 'from'] }));
+    }).toThrow(/twice/);
+    expect(() => {
+      checkContract(event({ label: 'Raid', filter: ['from'] }));
+    }).not.toThrow();
+    const nonObject = {
+      ...base,
+      events: { n: { schema: z.number(), flow: { label: 'N', filter: ['x'] } } },
+    } as ContractShape;
+    expect(() => {
+      checkContract(nonObject);
+    }).toThrow(/object schema/);
+  });
+
+  it('checks labels of RPCs and keeps retryable off queries', () => {
+    const rpc = (def: unknown) => ({ ...base, rpc: { q: def } }) as ContractShape;
+    expect(() => {
+      checkContract(rpc({ output: z.object({}), flow: { label: '' } }));
+    }).toThrow(/label/);
+    expect(() => {
+      checkContract(
+        rpc({ kind: 'query', output: z.object({}), flow: { label: 'Q', retryable: true } }),
+      );
+    }).toThrow(/retryable/);
+    expect(() => {
+      checkContract(rpc({ output: z.object({}), flow: { label: 'Give', retryable: true } }));
+    }).not.toThrow();
+  });
+});

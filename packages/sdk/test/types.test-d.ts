@@ -352,3 +352,27 @@ describe('RPC implementations', () => {
     });
   });
 });
+
+describe('flow marks', () => {
+  it('are accepted on events and RPCs and keep their literal label', () => {
+    const contract = defineContract({
+      id: 'marks',
+      version: '1.0.0',
+      events: {
+        raid: { schema: z.object({ from: z.string() }), flow: { label: 'Raid', filter: ['from'] } },
+      },
+      rpc: { give: { output: z.object({}), flow: { label: 'Give', retryable: true } } },
+    });
+    expectTypeOf(contract.events.raid.flow.label).toEqualTypeOf<'Raid'>();
+    expectTypeOf(contract.rpc.give.flow.retryable).toEqualTypeOf<true>();
+  });
+
+  it('need a string label', () => {
+    defineContract({
+      id: 'marks',
+      version: '1.0.0',
+      // @ts-expect-error a label is text
+      rpc: { give: { output: z.object({}), flow: { label: 1 } } },
+    });
+  });
+});

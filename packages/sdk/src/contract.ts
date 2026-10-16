@@ -6,9 +6,26 @@ import type { EventDefsOf, IsUnion, MergeMaps, RpcDefsOf } from './type-utils.ts
 export type Role = 'owner' | 'mod';
 export type ClientKind = 'panel' | 'overlay';
 
+/** Marks an event as a flow trigger (read by the flow engine, M6a). */
+export interface EventFlowDef {
+  readonly label: string;
+  readonly description?: string;
+  /** Top-level payload fields a flow can filter on; a `choice()` field gets a dropdown. */
+  readonly filter?: readonly string[];
+}
+
+/** Marks a mutation as a flow step, or a query as a flow value (read by the flow engine, M6a). */
+export interface RpcFlowDef {
+  readonly label: string;
+  readonly description?: string;
+  /** Mutations only: a `rate-limited` failure of the whole RPC means it changed nothing. */
+  readonly retryable?: boolean;
+}
+
 export interface EventDef<S extends z.ZodType = z.ZodType> {
   readonly schema: S;
   readonly expose?: readonly ClientKind[];
+  readonly flow?: EventFlowDef;
 }
 
 export interface HookDef<S extends z.ZodType = z.ZodType> {
@@ -32,6 +49,7 @@ export interface RpcDef<I extends z.ZodType = z.ZodType, O extends z.ZodType = z
   readonly expose?: { readonly panel?: Role; readonly overlay?: boolean };
   /** How long callers wait by default (1 to 120000 ms; default 5000). A caller's option wins. */
   readonly timeoutMs?: number;
+  readonly flow?: RpcFlowDef;
 }
 
 export interface ProviderMethodDef<
@@ -270,8 +288,12 @@ export function checkContract(shape: ContractShape): void {
       seen.set(member, group);
     }
   }
+  for (const [member, def] of Object.entries(shape.events ?? {})) {
+    if (def.flow !== undefined) checkEventFlow(shape, member, def);
+  }
   for (const [member, def] of Object.entries(shape.rpc ?? {})) {
     checkTimeout(shape, `RPC "${member}"`, def.timeoutMs);
+    if (def.flow !== undefined) checkRpcFlow(shape, member, def);
     if (def.kind !== undefined && !RPC_KINDS.has(def.kind)) {
       throw new Error(
         `Invalid kind "${def.kind}" of RPC "${member}" in contract "${shape.id}" (expected "query" or "mutation")`,
@@ -296,6 +318,39 @@ export function checkContract(shape: ContractShape): void {
   }
   checkChoices(shape);
   checkFailureCodes(shape);
+}
+
+function checkFlowLabel(where: string, label: unknown): void {
+  if (typeof label !== 'string' || label.trim() === '') {
+    throw new Error(`${where}: flow needs a label`);
+  }
+}
+
+function checkEventFlow(contract: ContractShape, member: string, def: EventDef): void {
+  const where = `Event "${member}" of contract "${contract.id}"`;
+  checkFlowLabel(where, def.flow?.label);
+  const filter = def.flow?.filter ?? [];
+  if (filter.length === 0) return;
+  const shape: unknown = (def.schema as { shape?: unknown }).shape;
+  if (typeof shape !== 'object' || shape === null) {
+    throw new Error(`${where}: a flow filter needs an object schema`);
+  }
+  const seen = new Set<string>();
+  for (const field of filter) {
+    if (seen.has(field)) throw new Error(`${where}: flow filter "${field}" is listed twice`);
+    seen.add(field);
+    if (!Object.hasOwn(shape, field)) {
+      throw new Error(`${where}: flow filter "${field}" is not a top-level payload field`);
+    }
+  }
+}
+
+function checkRpcFlow(contract: ContractShape, member: string, def: RpcDef): void {
+  const where = `RPC "${member}" of contract "${contract.id}"`;
+  checkFlowLabel(where, def.flow?.label);
+  if (def.kind === 'query' && def.flow?.retryable !== undefined) {
+    throw new Error(`${where}: retryable is for mutations only`);
+  }
 }
 
 const MAX_TIMEOUT_MS = 120_000;
