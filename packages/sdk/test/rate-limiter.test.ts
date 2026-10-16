@@ -233,4 +233,53 @@ describe('createRateLimiter', () => {
   ])('validates %j', (overrides, message) => {
     expect(() => createRateLimiter(options(overrides))).toThrow(new RangeError(message));
   });
+  it('spaces starts by minIntervalMs', async () => {
+    const limiter = createRateLimiter(options({ limit: 10, minIntervalMs: 1000 }));
+    const { started, task } = track();
+    const all = Promise.all(['a', 'b', 'c'].map((name) => limiter.schedule(task(name))));
+    await vi.advanceTimersByTimeAsync(2000);
+    await all;
+    expect(started).toEqual([
+      ['a', 0],
+      ['b', 1000],
+      ['c', 2000],
+    ]);
+  });
+
+  it('rejects at once when spacing pushes the start past maxWaitMs', async () => {
+    const limiter = createRateLimiter(options({ limit: 10, minIntervalMs: 1000, maxWaitMs: 1500 }));
+    const { task } = track();
+    void limiter.schedule(task('a'));
+    void limiter.schedule(task('b')); // starts at 1000
+    // c would start at 2000, more than 1500 away.
+    expect(await limiter.schedule(task('c'))).toMatchObject({ ok: false, reason: 'rate-limited' });
+  });
+
+  it('setMinInterval(0) releases spaced tasks at once', async () => {
+    const limiter = createRateLimiter(options({ limit: 10, minIntervalMs: 1000 }));
+    const { started, task } = track();
+    const all = Promise.all(['a', 'b'].map((name) => limiter.schedule(task(name))));
+    limiter.setMinInterval(0);
+    await vi.advanceTimersByTimeAsync(0);
+    await all;
+    expect(started).toEqual([
+      ['a', 0],
+      ['b', 0],
+    ]);
+  });
+
+  it('checks minIntervalMs', () => {
+    const message = 'minIntervalMs must be between 0 and windowMs';
+    expect(() => createRateLimiter(options({ minIntervalMs: -1 }))).toThrow(
+      new RangeError(message),
+    );
+    // windowMs is 1000
+    expect(() => createRateLimiter(options({ minIntervalMs: 1001 }))).toThrow(
+      new RangeError(message),
+    );
+    const limiter = createRateLimiter(options());
+    expect(() => {
+      limiter.setMinInterval(Number.NaN);
+    }).toThrow(new RangeError(message));
+  });
 });

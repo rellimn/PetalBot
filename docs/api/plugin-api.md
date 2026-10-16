@@ -410,6 +410,7 @@ if (!result.ok) return result; // { ok: false, reason: 'rate-limited', error: { 
 
 - Sliding window over task starts; the budget is `max(1, floor(limit * safetyFactor))` (default 0.9).
 - Waiting tasks start in FIFO order. A full queue, or a start more than `maxWaitMs` away, is rejected at once; `rate-limited` always means "not attempted". A throwing task rejects `schedule` with its error.
+- `minIntervalMs` (optional, 0 to `windowMs`): at least this long between two starts, for per-second limits such as Twitch's 1 message per second for plain bots; `setMinInterval(ms)` changes it at runtime (SDK 2.1.0).
 - `setLimit(limit)` resizes (e.g. the bot became a moderator), `pause(ms)` starts nothing for a while (e.g. the platform reported a hit) and rejects waiting tasks that would expire, `stats()` returns `{ queued, remaining, limit }`, `dispose()` rejects everything waiting.
 
 ## Errors and results

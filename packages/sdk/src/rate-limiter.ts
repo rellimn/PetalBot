@@ -21,6 +21,11 @@ export interface RateLimiterOptions {
   readonly maxWaitMs: number;
   /** Share of `limit` actually used, leaving room for drift and manual sends. Default 0.9. */
   readonly safetyFactor?: number | undefined;
+  /**
+   * At least this long between two starts (0 to `windowMs`; default 0), for per-second limits
+   * on top of the window, such as Twitch's 1 message per second for plain bots.
+   */
+  readonly minIntervalMs?: number | undefined;
 }
 
 export interface RateLimiterStats {
@@ -39,6 +44,8 @@ export interface RateLimiter {
   schedule<T>(task: () => T | Promise<T>): Promise<Scheduled<T>>;
   /** Resizes the window budget, e.g. after the bot's role changed. */
   setLimit(limit: number): void;
+  /** Changes `minIntervalMs`, e.g. after the bot's role changed. */
+  setMinInterval(ms: number): void;
   /** Starts nothing for `ms`, e.g. after the platform reported a rate-limit hit. */
   pause(ms: number): void;
   stats(): RateLimiterStats;
@@ -61,6 +68,12 @@ function checkLimit(limit: number): void {
   }
 }
 
+function checkMinInterval(ms: number, windowMs: number): void {
+  if (!(Number.isFinite(ms) && ms >= 0 && ms <= windowMs)) {
+    throw new RangeError('minIntervalMs must be between 0 and windowMs');
+  }
+}
+
 function checkOptions(options: RateLimiterOptions, safetyFactor: number): void {
   checkLimit(options.limit);
   if (!(options.windowMs > 0)) throw new RangeError('windowMs must be positive');
@@ -71,6 +84,7 @@ function checkOptions(options: RateLimiterOptions, safetyFactor: number): void {
   if (!(safetyFactor > 0 && safetyFactor <= 1)) {
     throw new RangeError('safetyFactor must be greater than 0 and at most 1');
   }
+  checkMinInterval(options.minIntervalMs ?? 0, options.windowMs);
 }
 
 /**
@@ -83,6 +97,7 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
   checkOptions(options, safetyFactor);
   const { windowMs, maxQueue, maxWaitMs } = options;
   let limit = options.limit;
+  let minInterval = options.minIntervalMs ?? 0;
   let pausedUntil = 0;
   let disposed = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -97,11 +112,14 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
   };
 
   /** The earliest start at or after `earliest`, given the starts in `simulated`. */
+  // minInterval <= windowMs, so the last start is never pruned while it still matters.
   const startAfter = (simulated: readonly number[], earliest: number): number => {
+    const last = simulated.at(-1);
+    const spaced = last === undefined ? earliest : Math.max(earliest, last + minInterval);
     const blocking = simulated.at(-budget());
     return simulated.length >= budget() && blocking !== undefined
-      ? Math.max(earliest, blocking + windowMs)
-      : earliest;
+      ? Math.max(spaced, blocking + windowMs)
+      : spaced;
   };
 
   /** When a task behind `ahead` waiting tasks would start. */
@@ -204,6 +222,11 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
     setLimit(next) {
       checkLimit(next);
       limit = next;
+      reevaluate();
+    },
+    setMinInterval(ms) {
+      checkMinInterval(ms, windowMs);
+      minInterval = ms;
       reevaluate();
     },
     pause(ms) {
