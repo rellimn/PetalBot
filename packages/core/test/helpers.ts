@@ -45,8 +45,11 @@ export const counterContract = defineContract({
   },
   providers: {
     sink: {
-      write: { input: z.object({ text: z.string() }), output: z.object({ id: z.string() }) },
-      flush: { input: z.object({}), output: z.object({}) },
+      methods: {
+        write: { input: z.object({ text: z.string() }), output: z.object({ id: z.string() }) },
+        flush: { input: z.object({}), output: z.object({}) },
+      },
+      inbound: { written: z.object({ text: z.string() }) },
     },
   },
 });

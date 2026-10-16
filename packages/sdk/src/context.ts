@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import type { ContractShape, ProviderSlotDef, SecretDefs } from './contract.ts';
+import type { ContractShape, ProviderMethodDef, ProviderSlotDef, SecretDefs } from './contract.ts';
 import type { EventEnvelope } from './envelope.ts';
 import type { HttpApi } from './http.ts';
 import type { Logger } from './logger.ts';
@@ -98,41 +98,100 @@ export interface HookOptions {
   readonly priority?: number;
 }
 
-/** What implementers register: every method optional  */
+// Optional parts are matched with `?:` and NonNullable, so the base ProviderSlotDef keeps
+// string-keyed methods while a concrete slot without a part gets none.
+type MethodDefsOf<Slot> = Slot extends { methods?: infer M }
+  ? NonNullable<M> extends Readonly<Record<string, ProviderMethodDef>>
+    ? NonNullable<M>
+    : NoMembers
+  : NoMembers;
+type MethodInput<D> = D extends { input: infer I extends z.ZodType } ? I : never;
+type MethodOutput<D> = D extends { output: infer O extends z.ZodType } ? O : never;
+type InfoSchemaOf<Slot> = Slot extends { info?: infer O }
+  ? NonNullable<O> extends z.ZodObject
+    ? NonNullable<O>
+    : never
+  : never;
+
+/** The inbound schemas of a slot, by name (none when it declares none). */
+export type InboundOf<Slot> = Slot extends { inbound?: infer I }
+  ? NonNullable<I> extends Readonly<Record<string, z.ZodType>>
+    ? NonNullable<I>
+    : NoMembers
+  : NoMembers;
+
+/** What implementers register: every method optional. */
 export type ProviderImpl<Slot extends ProviderSlotDef> = {
-  readonly [M in keyof Slot]?: (
-    input: z.output<Slot[M]['input']>,
-  ) => Promise<z.input<Slot[M]['output']>>;
+  readonly [M in keyof MethodDefsOf<Slot>]?: (
+    input: z.output<MethodInput<MethodDefsOf<Slot>[M]>>,
+  ) => Promise<z.input<MethodOutput<MethodDefsOf<Slot>[M]>>>;
 };
+
+/** The second argument of `ctx.provide`: `info` exactly when the slot declares it. */
+export type ProvideOptions<Slot extends ProviderSlotDef> = ([InfoSchemaOf<Slot>] extends [never]
+  ? { readonly info?: never }
+  : { readonly info: z.input<InfoSchemaOf<Slot>> }) & { readonly methods?: ProviderImpl<Slot> };
+
+/** What `ctx.provide` returns: the provider's own registration. */
+export interface Provided<Slot extends ProviderSlotDef> {
+  readonly key: string;
+  /** Sends `payload` to the slot owner. Validated now; a bad payload throws here. */
+  push<N extends keyof InboundOf<Slot> & string>(
+    name: N,
+    payload: z.input<InboundOf<Slot>[N]>,
+  ): void;
+  /** Replaces the registered info. */
+  update(info: [InfoSchemaOf<Slot>] extends [never] ? never : z.input<InfoSchemaOf<Slot>>): void;
+  /** Ends the registration (also done automatically when the plugin stops). */
+  dispose(): void;
+}
 
 /** What the slot owner sees for one registered provider. */
 export interface ProviderHandle<Slot extends ProviderSlotDef> {
   readonly key: string;
   readonly pluginId: string;
+  /** The registered info (undefined for slots without info). */
+  readonly info: [InfoSchemaOf<Slot>] extends [never] ? undefined : z.output<InfoSchemaOf<Slot>>;
   /** Names of implemented methods. */
-  readonly methods: readonly (keyof Slot & string)[];
-  has(method: keyof Slot & string): boolean;
-  /** Validates input and output; throws UnsupportedCapabilityError if not implemented. */
-  call<M extends keyof Slot & string>(
+  readonly methods: readonly (keyof MethodDefsOf<Slot> & string)[];
+  has(method: keyof MethodDefsOf<Slot> & string): boolean;
+  /**
+   * Validates input and output; throws UnsupportedCapabilityError if not implemented and
+   * ProviderTimeoutError when the provider takes longer than the method's timeout.
+   */
+  call<M extends keyof MethodDefsOf<Slot> & string>(
     method: M,
-    input: z.input<Slot[M]['input']>,
-  ): Promise<z.output<Slot[M]['output']>>;
+    input: z.input<MethodInput<MethodDefsOf<Slot>[M]>>,
+  ): Promise<z.output<MethodOutput<MethodDefsOf<Slot>[M]>>>;
 }
 
-/** A provider of a slot was registered, or its registration ended. */
+/** A provider of a slot was registered, updated its info, or its registration ended. */
 export interface ProviderChange {
   readonly key: string;
   /** The implementing plugin. */
   readonly pluginId: string;
   /** `removed` also when the implementing plugin stopped. */
-  readonly change: 'added' | 'removed';
+  readonly change: 'added' | 'updated' | 'removed';
 }
 
 export interface ProviderView<Slot extends ProviderSlotDef> {
   keys(): string[];
   get(key: string): ProviderHandle<Slot> | undefined;
-  /** Calls `listener` after a provider of this slot was added or removed. Removed on stop. */
+  /** Every registered provider. */
+  list(): ProviderHandle<Slot>[];
+  /** Calls `listener` after a provider of this slot was added, updated or removed. Removed on stop. */
   onChange(listener: (change: ProviderChange) => void): Disposer;
+  /**
+   * Handles pushes named `name`, one at a time in order, with the provider's handle as of the
+   * push. Pushes while no handler is registered are dropped. Removed on stop.
+   */
+  on<N extends keyof InboundOf<Slot> & string>(
+    name: N,
+    handler: (
+      payload: z.output<InboundOf<Slot>[N]>,
+      provider: ProviderHandle<Slot>,
+    ) => MaybePromise<void>,
+  ): Disposer;
 }
 
 /**
@@ -189,8 +248,8 @@ export interface PluginContext<
   provide<N extends keyof ImplementableSlots<Deps, Opt> & string>(
     slot: N,
     key: string,
-    impl: ProviderImpl<SlotOf<ImplementableSlots<Deps, Opt>[N]>>,
-  ): Disposer;
+    options: ProvideOptions<SlotOf<ImplementableSlots<Deps, Opt>[N]>>,
+  ): Provided<SlotOf<ImplementableSlots<Deps, Opt>[N]>>;
 
   providers<N extends keyof OwnedSlots<Own> & string>(
     slot: N,

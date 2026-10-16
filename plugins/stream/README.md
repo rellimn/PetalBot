@@ -27,22 +27,22 @@ Every event carries `source: { platform, connection }`. Users are
 | RPC               | What it returns                                                                    |
 | ----------------- | ---------------------------------------------------------------------------------- |
 | `stream.recent()` | The last 30 events since stream started, newest first: `{ id, timestamp, event }`. |
-| `stream.status()` | `{ [connection]: { live, since? } }` for every registered connection.              |
+| `stream.status()` | `{ [connection]: { live, since? } }` for every connection.                         |
 
 Both are queries exposed to the panel (`mod`).
 
 ## For platform plugins
 
-List `stream` as a required dependency: optional dependents aren't restarted with it.
+1. `const conn = ctx.provide('stream.platform', '<platform>:<channel>', { info })`. The key is the
+   connection id; `info` is `{ channel, displayName, live?, since? }`: pass `live: true` (and
+   `since`) when the stream is already running. No methods yet.
+2. `conn.push('event', { type, ... })`, e.g. `{ type: 'follow', user }`. Stream adds `source` from
+   the key and emits `stream.<type>` without `type`. Pass the platform's start time as `since` with
+   `online`; a repeated `online` keeps the first one. Stream doesn't de-duplicate events: the
+   platform must (Twitch: by EventSub message id).
+3. `conn.update(info)` replaces the info; its `live`/`since` become the connection's status.
 
-1. `ctx.provide('stream.platform', '<platform>:<channel>', {})`: no methods yet; it ties the
-   connection to your plugin.
-2. `stream.registerConnection({ id, platform, channel, displayName, live?, since? })`: only from
-   the plugin providing `id`; pass `live: true` (and `since`) when the stream is already running, also when registering
-   again.
-3. `stream.ingest({ type, source, ... })`, e.g. `{ type: 'follow', source, user }`: only for
-   connections the calling plugin registered. Stream emits `stream.<type>` without `type`. Pass
-   the platform's start time as `since` with `online`; a repeated `online` keeps the first one.
+A connection exists as long as its provider does, and survives a restart of `stream`.
 
 ## Panel
 

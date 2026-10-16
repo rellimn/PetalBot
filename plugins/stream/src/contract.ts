@@ -3,64 +3,44 @@
  * every platform, in one shape.
  *
  * Consumers listen to `stream.*` events. Platform plugins provide `stream.platform` once per
- * connection (no methods yet; it ties the connection to the plugin), announce it with
- * `stream.registerConnection` and feed events in through `stream.ingest`.
+ * connection, keyed by its connection id, and push events in through it.
  *
  * Runs everywhere (server, panel, other plugins), so it imports only zod and @petalbot/sdk.
  * Guide: docs/plugin-guide.md#12-platforms-and-providers.
  */
 import { z } from 'zod';
-import { defineContract } from '@petalbot/sdk';
+import { ConnectionId, PlatformUser, Source, defineContract } from '@petalbot/sdk';
 
-export const PlatformId = z.string().regex(/^[a-z][a-z0-9-]*$/);
-/** `<platform>:<channel>`, e.g. `twitch:roman`. */
-export const ConnectionId = z.string().regex(/^[a-z][a-z0-9-]*:.+$/);
-
-export const Source = z.object({ platform: PlatformId, connection: ConnectionId });
-export type Source = z.output<typeof Source>;
-
-export const StreamUser = z.object({
-  /** The platform's stable user id. */
-  id: z.string().min(1),
-  login: z.string(),
-  displayName: z.string(),
-});
+export const StreamUser = PlatformUser;
 export type StreamUser = z.output<typeof StreamUser>;
 
 /** 1, 2 or 3 on Twitch (its 1000, 2000, 3000). */
 const Tier = z.number().int().min(1);
 
-const Online = z.object({
-  source: Source,
+// Each event's own fields; the events add `source`, the platform's pushes don't carry it.
+const OnlineFields = z.object({
   /** When the stream started (milliseconds since the epoch), if the platform tells. */
   since: z.number().int().optional(),
   title: z.string().optional(),
   category: z.string().optional(),
 });
-const Offline = z.object({ source: Source });
-const Follow = z.object({ source: Source, user: StreamUser });
-const Subscription = z.object({
-  source: Source,
+const OfflineFields = z.object({});
+const FollowFields = z.object({ user: StreamUser });
+const SubscriptionFields = z.object({
   user: StreamUser,
   tier: Tier,
   /** Total months, when the platform tells (resubscriptions). */
   months: z.number().int().min(1).optional(),
   message: z.string().optional(),
 });
-const GiftSubscription = z.object({
-  source: Source,
+const GiftSubscriptionFields = z.object({
   /** Missing for anonymous gifts. */
   gifter: StreamUser.optional(),
   count: z.number().int().min(1),
   tier: Tier,
 });
-const Raid = z.object({
-  source: Source,
-  from: StreamUser,
-  viewers: z.number().int().min(0),
-});
-const Support = z.object({
-  source: Source,
+const RaidFields = z.object({ from: StreamUser, viewers: z.number().int().min(0) });
+const SupportFields = z.object({
   /** Missing for anonymous support. */
   user: StreamUser.optional(),
   amount: z.number().positive(),
@@ -69,7 +49,16 @@ const Support = z.object({
   message: z.string().optional(),
 });
 
-/** What `stream.ingest` takes: one event, by `type`. */
+const withSource = { source: Source };
+const Online = OnlineFields.extend(withSource);
+const Offline = OfflineFields.extend(withSource);
+const Follow = FollowFields.extend(withSource);
+const Subscription = SubscriptionFields.extend(withSource);
+const GiftSubscription = GiftSubscriptionFields.extend(withSource);
+const Raid = RaidFields.extend(withSource);
+const Support = SupportFields.extend(withSource);
+
+/** One event, by `type`, as it is buffered (with its source). */
 export const StreamEvent = z.discriminatedUnion('type', [
   Online.extend({ type: z.literal('online') }),
   Offline.extend({ type: z.literal('offline') }),
@@ -81,6 +70,18 @@ export const StreamEvent = z.discriminatedUnion('type', [
 ]);
 export type StreamEvent = z.output<typeof StreamEvent>;
 
+/** What a platform pushes: one event, by `type`; stream adds `source` from the provider's key. */
+export const InboundStreamEvent = z.discriminatedUnion('type', [
+  OnlineFields.extend({ type: z.literal('online') }),
+  OfflineFields.extend({ type: z.literal('offline') }),
+  FollowFields.extend({ type: z.literal('follow') }),
+  SubscriptionFields.extend({ type: z.literal('subscription') }),
+  GiftSubscriptionFields.extend({ type: z.literal('giftSubscription') }),
+  RaidFields.extend({ type: z.literal('raid') }),
+  SupportFields.extend({ type: z.literal('support') }),
+]);
+export type InboundStreamEvent = z.input<typeof InboundStreamEvent>;
+
 /** One entry of `stream.recent`. */
 export const Activity = z.object({
   id: z.string(),
@@ -90,12 +91,11 @@ export const Activity = z.object({
 });
 export type Activity = z.output<typeof Activity>;
 
-export const ConnectionRegistration = z.object({
-  id: ConnectionId,
-  platform: PlatformId,
+/** What a platform registers its connection with (the `info` of `stream.platform`). */
+export const StreamConnectionInfo = z.object({
   channel: z.string().min(1),
   displayName: z.string().min(1),
-  /** Whether the stream is live right now, so no `stream.online` is needed to say so. */
+  /** Whether the stream is live right now, so no `online` push is needed to say so. */
   live: z.boolean().default(false),
   /** Since when it is live (milliseconds since the epoch). */
   since: z.number().int().optional(),
@@ -111,7 +111,7 @@ const expose = ['panel'] as const;
 
 export const streamContract = defineContract({
   id: 'stream',
-  version: '1.0.0',
+  version: '2.0.0',
 
   events: {
     online: { schema: Online, expose },
@@ -134,15 +134,18 @@ export const streamContract = defineContract({
       output: z.record(ConnectionId, ConnectionStatus),
       expose: { panel: 'mod' },
     },
-
-    // For platform plugins only, from the plugin that provides the connection.
-    registerConnection: { input: ConnectionRegistration, output: z.object({}) },
-    ingest: { input: StreamEvent, output: z.object({}) },
   },
 
   providers: {
-    /** One per connection, keyed by its id. No methods yet: outbound stream operations go here. */
-    platform: {},
+    /**
+     * One per connection, keyed by its id (`twitch:roman`). No methods yet: outbound stream
+     * operations go here.
+     */
+    platform: {
+      key: ConnectionId,
+      info: StreamConnectionInfo,
+      inbound: { event: InboundStreamEvent },
+    },
   },
 
   widgets: {

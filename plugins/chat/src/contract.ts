@@ -3,36 +3,27 @@
  *
  * Consumers call `chat.send`, `chat.reply`, `chat.broadcast`, `chat.delete` and `chat.timeout`
  * and listen to `chat.message`; they never see a platform. Platform plugins (twitch, later
- * youtube, kick) implement the `chat.platform` provider slot once per connection and feed
- * messages in through `chat.ingest`.
+ * youtube, kick) provide the `chat.platform` slot once per connection, keyed by its connection
+ * id, and push messages in through it.
  *
  * Runs everywhere (server, panel, other plugins), so it imports only zod and @petalbot/sdk.
  * Guide: docs/plugin-guide.md#12-platforms-and-providers.
  */
 import { z } from 'zod';
-import { Result, defineContract, defineFailure, rateLimitedFailure } from '@petalbot/sdk';
+import {
+  Actor,
+  ConnectionId,
+  PlatformId,
+  PlatformUser,
+  Result,
+  Source,
+  Target,
+  defineContract,
+  defineFailure,
+  rateLimitedFailure,
+} from '@petalbot/sdk';
 
-/** `twitch`, `youtube`, ...: open, so a new platform changes no union. */
-export const PlatformId = z.string().regex(/^[a-z][a-z0-9-]*$/);
-/** `<platform>:<channel>`, e.g. `twitch:roman`. */
-export const ConnectionId = z.string().regex(/^[a-z][a-z0-9-]*:.+$/);
-
-/** Where a message came from. */
-export const Source = z.object({ platform: PlatformId, connection: ConnectionId });
-export type Source = z.output<typeof Source>;
-
-/** Who to act on: a connection, or a platform's default connection. */
-export const Target = z.union([
-  z.object({ connection: ConnectionId }),
-  z.object({ platform: PlatformId }),
-]);
-export type Target = z.output<typeof Target>;
-
-export const ChatUser = z.object({
-  /** The platform's stable user id. */
-  id: z.string().min(1),
-  login: z.string(),
-  displayName: z.string(),
+export const ChatUser = PlatformUser.extend({
   badges: z.object({
     broadcaster: z.boolean(),
     moderator: z.boolean(),
@@ -62,6 +53,10 @@ export const ChatMessage = z.object({
 });
 export type ChatMessage = z.output<typeof ChatMessage>;
 
+/** A message as a platform pushes it: chat adds `source` from the provider's key. */
+export const InboundMessage = ChatMessage.omit({ source: true });
+export type InboundMessage = z.input<typeof InboundMessage>;
+
 /** A message of `chat.recent`: deleted ones stay, marked. */
 export const RecentMessage = ChatMessage.extend({ deleted: z.boolean() });
 export type RecentMessage = z.output<typeof RecentMessage>;
@@ -70,10 +65,8 @@ export type RecentMessage = z.output<typeof RecentMessage>;
 export const Capability = z.enum(['send', 'reply', 'delete', 'timeout']);
 export type Capability = z.output<typeof Capability>;
 
-/** What a platform announces with `chat.registerConnection`. */
-export const ConnectionRegistration = z.object({
-  id: ConnectionId,
-  platform: PlatformId,
+/** What a platform registers its connection with (the `info` of `chat.platform`). */
+export const ChatConnectionInfo = z.object({
   /** The platform's channel login or handle. */
   channel: z.string().min(1),
   displayName: z.string().min(1),
@@ -81,7 +74,10 @@ export const ConnectionRegistration = z.object({
   isDefault: z.boolean(),
 });
 
-export const ConnectionInfo = ConnectionRegistration.extend({
+/** A connection as `chat.connections` lists it. */
+export const ConnectionInfo = ChatConnectionInfo.extend({
+  id: ConnectionId,
+  platform: PlatformId,
   capabilities: z.array(Capability),
 });
 export type ConnectionInfo = z.output<typeof ConnectionInfo>;
@@ -194,7 +190,7 @@ const ReplyTarget = z.object({ id: z.string().min(1), source: Source, user: Chat
 
 export const chatContract = defineContract({
   id: 'chat',
-  version: '2.0.0',
+  version: '3.0.0',
 
   events: {
     message: { schema: ChatMessage, expose: ['panel'] },
@@ -209,15 +205,15 @@ export const chatContract = defineContract({
   hooks: {
     /**
      * Runs before every send and reply, once per connection. Taps may rewrite `text` or veto
-     * (the caller gets `forbidden`). `caller` is the calling plugin's id, or `client` for the
-     * panel.
+     * (the caller gets `forbidden`). `actor` is who caused the send: a panel user, a viewer
+     * (through a flow) or a plugin.
      */
     beforeSend: {
       input: z.object({
         connection: ConnectionId,
         text: Text,
         replyTo: z.string().optional(),
-        caller: z.string(),
+        actor: Actor,
       }),
     },
   },
@@ -227,9 +223,15 @@ export const chatContract = defineContract({
       input: z.object({ target: Target, text: Text }),
       output: SendResult,
       expose: { panel: 'mod' },
+      // A send may wait up to 10 s in the platform's rate limiter.
+      timeoutMs: 15_000,
     },
     /** Replies natively where the platform can, else the platform mentions the author. */
-    reply: { input: z.object({ to: ReplyTarget, text: Text }), output: ReplyResult },
+    reply: {
+      input: z.object({ to: ReplyTarget, text: Text }),
+      output: ReplyResult,
+      timeoutMs: 15_000,
+    },
     /** One result per connection; no filter means every connection. */
     broadcast: {
       input: z.object({
@@ -238,6 +240,7 @@ export const chatContract = defineContract({
         connections: z.array(ConnectionId).optional(),
       }),
       output: z.record(ConnectionId, BroadcastItemResult),
+      timeoutMs: 15_000,
     },
     delete: {
       input: z.object({ target: Target, messageId: z.string().min(1) }),
@@ -255,33 +258,41 @@ export const chatContract = defineContract({
     connections: { kind: 'query', output: z.array(ConnectionInfo), expose: { panel: 'mod' } },
     /** The last 50 messages since chat started, oldest first. */
     recent: { kind: 'query', output: z.array(RecentMessage), expose: { panel: 'mod' } },
-
-    // For platform plugins only, from the plugin that provides the connection.
-    registerConnection: { input: ConnectionRegistration, output: z.object({}) },
-    ingest: { input: ChatMessage, output: z.object({}) },
-    ingestDeleted: {
-      input: z.object({ source: Source, messageId: z.string().min(1) }),
-      output: z.object({}),
-    },
   },
 
   providers: {
-    /** One provider per connection, keyed by its id. Every method is optional. */
+    /**
+     * One provider per connection, keyed by its id (`twitch:roman`); the platform comes from the
+     * key. Every method is optional.
+     */
     platform: {
-      send: { input: z.object({ text: z.string() }), output: ProviderSendResult },
-      /** The platform owns the fallback: mention syntax differs per platform. */
-      reply: {
-        input: z.object({ to: z.object({ id: z.string(), user: ChatUser }), text: z.string() }),
-        output: ProviderReplyResult,
+      key: ConnectionId,
+      info: ChatConnectionInfo,
+      methods: {
+        send: {
+          input: z.object({ text: z.string() }),
+          output: ProviderSendResult,
+          timeoutMs: 12_000,
+        },
+        /** The platform owns the fallback: mention syntax differs per platform. */
+        reply: {
+          input: z.object({ to: z.object({ id: z.string(), user: ChatUser }), text: z.string() }),
+          output: ProviderReplyResult,
+          timeoutMs: 12_000,
+        },
+        delete: { input: z.object({ messageId: z.string() }), output: ProviderDeleteResult },
+        timeout: {
+          input: z.object({
+            userId: z.string(),
+            seconds: z.number().int(),
+            reason: z.string().optional(),
+          }),
+          output: ProviderTimeoutResult,
+        },
       },
-      delete: { input: z.object({ messageId: z.string() }), output: ProviderDeleteResult },
-      timeout: {
-        input: z.object({
-          userId: z.string(),
-          seconds: z.number().int(),
-          reason: z.string().optional(),
-        }),
-        output: ProviderTimeoutResult,
+      inbound: {
+        message: InboundMessage,
+        messageDeleted: z.object({ messageId: z.string().min(1) }),
       },
     },
   },

@@ -11,7 +11,12 @@ import {
   type PluginContext,
 } from '@petalbot/sdk';
 import type { TestHarness } from '@petalbot/testing';
-import { chatContract, type ChatMessage, type ChatUser } from '../src/contract.ts';
+import {
+  chatContract,
+  type ChatMessage,
+  type ChatUser,
+  type InboundMessage,
+} from '../src/contract.ts';
 
 export const viewer: ChatUser = {
   id: 'u1',
@@ -20,13 +25,22 @@ export const viewer: ChatUser = {
   badges: { broadcaster: false, moderator: false, vip: false, subscriber: true },
 };
 
-export const twitch = {
-  id: 'twitch:roman',
-  platform: 'twitch',
-  channel: 'roman',
-  displayName: 'roman',
-  isDefault: true,
-};
+/** The info of the Twitch connection `twitch:roman`. */
+export const twitch = { channel: 'roman', displayName: 'roman', isDefault: true };
+/** How `chat.connections` lists it (plus its capabilities). */
+export const twitchConnection = { ...twitch, id: 'twitch:roman', platform: 'twitch' };
+
+/** A message as a platform pushes it: chat adds the source from the provider's key. */
+export function inbound(id: string, overrides: Partial<InboundMessage> = {}): InboundMessage {
+  return {
+    id,
+    user: viewer,
+    text: `message ${id}`,
+    timestamp: 1_000,
+    fromBot: false,
+    ...overrides,
+  };
+}
 
 export function message(id: string, overrides: Partial<ChatMessage> = {}): ChatMessage {
   return {
@@ -67,7 +81,8 @@ async function startDependent(
 export function startPlatform(harness: ChatHarness, id: string, key: string) {
   return startDependent(harness, id, (ctx) => {
     ctx.provide('chat.platform', key, {
-      send: () => Promise.resolve({ ok: true, messageId: `${id}-1` }),
+      info: { channel: 'roman', displayName: 'roman', isDefault: false },
+      methods: { send: () => Promise.resolve({ ok: true, messageId: `${id}-1` }) },
     });
   });
 }

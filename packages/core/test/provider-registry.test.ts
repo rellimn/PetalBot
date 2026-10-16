@@ -10,8 +10,9 @@ import {
   defineContract,
 } from '@petalbot/sdk';
 import { ContractRegistry } from '../src/contract-registry.ts';
+import { EventBus } from '../src/event-bus.ts';
 import { ProviderRegistry } from '../src/provider-registry.ts';
-import { counterContract } from './helpers.ts';
+import { counterContract, createMemoryLogger, delay } from './helpers.ts';
 
 const SLOT = 'counter.sink';
 const slotDef = counterContract.providers.sink;
@@ -20,7 +21,7 @@ const write = (input: { text: string }) => Promise.resolve({ id: `id-${input.tex
 describe('ProviderRegistry', () => {
   it('exposes registered providers with their implemented methods', async () => {
     const registry = new ProviderRegistry();
-    registry.register('twitch', SLOT, slotDef, 'twitch:roman', { write });
+    registry.register('twitch', SLOT, slotDef, 'twitch:roman', { methods: { write } });
     const view = registry.view(SLOT);
     expect(view.keys()).toEqual(['twitch:roman']);
     const handle = view.get('twitch:roman');
@@ -34,7 +35,7 @@ describe('ProviderRegistry', () => {
 
   it('throws UnsupportedCapabilityError for methods that are not implemented', async () => {
     const registry = new ProviderRegistry();
-    registry.register('twitch', SLOT, slotDef, 'twitch:roman', { write });
+    registry.register('twitch', SLOT, slotDef, 'twitch:roman', { methods: { write } });
     await expect(registry.view(SLOT).get('twitch:roman')?.call('flush', {})).rejects.toBeInstanceOf(
       UnsupportedCapabilityError,
     );
@@ -43,7 +44,9 @@ describe('ProviderRegistry', () => {
   it('validates provider input and output', async () => {
     const registry = new ProviderRegistry();
     registry.register('twitch', SLOT, slotDef, 'twitch:roman', {
-      write: () => Promise.resolve({ wrong: true }),
+      methods: {
+        write: () => Promise.resolve({ wrong: true }),
+      },
     });
     const handle = registry.view(SLOT).get('twitch:roman');
     await expect(handle?.call('write', { text: 1 })).rejects.toBeInstanceOf(ValidationError);
@@ -56,13 +59,15 @@ describe('ProviderRegistry', () => {
     const registry = new ProviderRegistry();
     expect(() =>
       registry.register('twitch', SLOT, slotDef, 'twitch:roman', {
-        shout: () => Promise.resolve({}),
+        methods: {
+          shout: () => Promise.resolve({}),
+        },
       }),
     ).toThrow(AccessError);
-    registry.register('twitch', SLOT, slotDef, 'twitch:roman', { write });
-    expect(() => registry.register('kick', SLOT, slotDef, 'twitch:roman', { write })).toThrow(
-      /already registered by "twitch"/,
-    );
+    registry.register('twitch', SLOT, slotDef, 'twitch:roman', { methods: { write } });
+    expect(() =>
+      registry.register('kick', SLOT, slotDef, 'twitch:roman', { methods: { write } }),
+    ).toThrow(/already registered by "twitch"/);
   });
 
   it('detects and binds methods of class-based providers', async () => {
@@ -73,7 +78,7 @@ describe('ProviderRegistry', () => {
       }
     }
     const registry = new ProviderRegistry();
-    registry.register('twitch', SLOT, slotDef, 'twitch:roman', new Sink());
+    registry.register('twitch', SLOT, slotDef, 'twitch:roman', { methods: new Sink() });
     const handle = registry.view(SLOT).get('twitch:roman');
     expect(handle?.methods).toEqual(['write']);
     expect(handle?.has('write')).toBe(true);
@@ -83,9 +88,11 @@ describe('ProviderRegistry', () => {
   it('calls object-literal methods with their object as this', async () => {
     const registry = new ProviderRegistry();
     registry.register('twitch', SLOT, slotDef, 'twitch:roman', {
-      prefix: 'lit',
-      write(this: { prefix: string }, input: { text: string }) {
-        return Promise.resolve({ id: `${this.prefix}-${input.text}` });
+      methods: {
+        prefix: 'lit',
+        write(this: { prefix: string }, input: { text: string }) {
+          return Promise.resolve({ id: `${this.prefix}-${input.text}` });
+        },
       },
     });
     await expect(
@@ -95,8 +102,10 @@ describe('ProviderRegistry', () => {
 
   it('removes providers when disposed', () => {
     const registry = new ProviderRegistry();
-    const dispose = registry.register('twitch', SLOT, slotDef, 'twitch:roman', { write });
-    dispose();
+    const provided = registry.register('twitch', SLOT, slotDef, 'twitch:roman', {
+      methods: { write },
+    });
+    provided.dispose();
     expect(registry.view(SLOT).keys()).toEqual([]);
   });
 
@@ -104,17 +113,19 @@ describe('ProviderRegistry', () => {
     const contracts = new ContractRegistry();
     const unregister = contracts.register(counterContract);
     const registry = new ProviderRegistry({ contracts });
-    registry.register('twitch', SLOT, slotDef, 'twitch:roman', { write });
+    registry.register('twitch', SLOT, slotDef, 'twitch:roman', { methods: { write } });
     unregister();
     contracts.register(
       defineContract({
         ...counterContract,
         providers: {
           sink: {
-            ...counterContract.providers.sink,
-            write: {
-              input: z.object({ text: z.string().min(3) }),
-              output: z.object({ id: z.string() }),
+            methods: {
+              ...counterContract.providers.sink.methods,
+              write: {
+                input: z.object({ text: z.string().min(3) }),
+                output: z.object({ id: z.string() }),
+              },
             },
           },
         },
@@ -132,9 +143,11 @@ describe('ProviderRegistry change listeners', () => {
     const changes: unknown[] = [];
     registry.view(SLOT).onChange((change) => changes.push(change));
     registry.view('other.slot').onChange(() => changes.push('wrong slot'));
-    const dispose = registry.register('twitch', SLOT, slotDef, 'twitch:roman', { write });
-    dispose();
-    dispose();
+    const provided = registry.register('twitch', SLOT, slotDef, 'twitch:roman', {
+      methods: { write },
+    });
+    provided.dispose();
+    provided.dispose();
     expect(changes).toEqual([
       { key: 'twitch:roman', pluginId: 'twitch', change: 'added' },
       { key: 'twitch:roman', pluginId: 'twitch', change: 'removed' },
@@ -148,18 +161,18 @@ describe('ProviderRegistry change listeners', () => {
     const first = registry.view(SLOT).onChange(listener);
     registry.view(SLOT).onChange(listener);
     first();
-    registry.register('twitch', SLOT, slotDef, 'twitch:roman', { write });
+    registry.register('twitch', SLOT, slotDef, 'twitch:roman', { methods: { write } });
     expect(changes).toEqual(['added']);
   });
 
   it('reports nothing for a refused registration', () => {
     const registry = new ProviderRegistry();
     const changes: string[] = [];
-    registry.register('twitch', SLOT, slotDef, 'twitch:roman', { write });
+    registry.register('twitch', SLOT, slotDef, 'twitch:roman', { methods: { write } });
     registry.view(SLOT).onChange((change) => changes.push(change.change));
-    expect(() => registry.register('kick', SLOT, slotDef, 'twitch:roman', { write })).toThrow(
-      AccessError,
-    );
+    expect(() =>
+      registry.register('kick', SLOT, slotDef, 'twitch:roman', { methods: { write } }),
+    ).toThrow(AccessError);
     expect(changes).toEqual([]);
   });
 });
@@ -170,7 +183,9 @@ describe('provider Result boundaries', () => {
     const unregister = contracts.register(resultContract);
     const registry = new ProviderRegistry({ contracts });
     registry.register('source', 'clock.source', resultContract.providers.source, 'one', {
-      read: () => Promise.resolve(fail(late, { at: timestamp })),
+      methods: {
+        read: () => Promise.resolve(fail(late, { at: timestamp })),
+      },
     });
     const handle = registry.view('clock.source').get('one');
     await expect(handle?.call('read', {})).resolves.toEqual({
@@ -184,7 +199,9 @@ describe('provider Result boundaries', () => {
       defineContract({
         ...resultContract,
         providers: {
-          source: { read: { input: z.object({}), output: Result(z.object({}), [gone]) } },
+          source: {
+            methods: { read: { input: z.object({}), output: Result(z.object({}), [gone]) } },
+          },
         },
       }),
     );
@@ -198,7 +215,9 @@ describe('provider Result boundaries', () => {
   ])('rejects an invalid provider failure: %j', async (value) => {
     const registry = new ProviderRegistry();
     registry.register('source', 'clock.source', resultContract.providers.source, 'one', {
-      read: () => Promise.resolve(value),
+      methods: {
+        read: () => Promise.resolve(value),
+      },
     });
     await expect(registry.view('clock.source').get('one')?.call('read', {})).rejects.toBeInstanceOf(
       ValidationError,
@@ -209,14 +228,18 @@ describe('provider Result boundaries', () => {
     vi.useFakeTimers();
     try {
       const slow = {
-        send: { input: z.object({}), output: z.object({}), timeoutMs: 12_000 },
-        ping: { input: z.object({}), output: z.object({}) },
+        methods: {
+          send: { input: z.object({}), output: z.object({}), timeoutMs: 12_000 },
+          ping: { input: z.object({}), output: z.object({}) },
+        },
       };
       const registry = new ProviderRegistry();
       const never = () => new Promise<never>(() => undefined);
       registry.register('twitch', 'chat.platform', slow, 'twitch:roman', {
-        send: never,
-        ping: never,
+        methods: {
+          send: never,
+          ping: never,
+        },
       });
       const handle = registry.view('chat.platform').get('twitch:roman');
       const send = handle?.call('send', {});
@@ -231,5 +254,128 @@ describe('provider Result boundaries', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('ProviderRegistry info and inbound', () => {
+  const chatSlot = {
+    key: z.string().regex(/^[a-z]+:.+$/),
+    info: z.object({ channel: z.string() }),
+    methods: {
+      send: { input: z.object({ text: z.string() }), output: z.object({ id: z.string() }) },
+    },
+    inbound: { message: z.object({ text: z.string().min(1) }) },
+  };
+  const setup = () => {
+    const contracts = new ContractRegistry();
+    const bus = new EventBus({ contracts, logger: createMemoryLogger() });
+    const registry = new ProviderRegistry({ contracts, bus });
+    return { bus, registry, view: registry.view('chat.platform') };
+  };
+
+  it('validates key and info when a provider registers', () => {
+    const { registry } = setup();
+    expect(() =>
+      registry.register('twitch', 'chat.platform', chatSlot, 'roman', { info: { channel: 'r' } }),
+    ).toThrow(ValidationError);
+    expect(() =>
+      registry.register('twitch', 'chat.platform', chatSlot, 'twitch:roman', {}),
+    ).toThrow(ValidationError);
+    expect(() =>
+      registry.register('twitch', 'counter.sink', slotDef, 'twitch:roman', {
+        info: { channel: 'r' },
+      }),
+    ).toThrow(AccessError);
+  });
+
+  it('delivers pushes in order to every owner handler with the info at push time', async () => {
+    const { bus, registry, view } = setup();
+    const seen: unknown[] = [];
+    view.on('chat', 'message', (payload, provider) => {
+      seen.push([payload, provider.info]);
+    });
+    const provided = registry.register('twitch', 'chat.platform', chatSlot, 'twitch:roman', {
+      info: { channel: 'a' },
+    });
+    provided.push('message', { text: '1' });
+    provided.update({ channel: 'b' });
+    provided.push('message', { text: '2' });
+    await bus.idle();
+    expect(seen).toEqual([
+      [{ text: '1' }, { channel: 'a' }],
+      [{ text: '2' }, { channel: 'b' }],
+    ]);
+    expect(view.get('twitch:roman')?.info).toEqual({ channel: 'b' });
+    expect(view.list().map((handle) => handle.key)).toEqual(['twitch:roman']);
+  });
+
+  it('rejects a malformed push at the pusher and delivers nothing', async () => {
+    const { bus, registry, view } = setup();
+    const handler = vi.fn();
+    view.on('chat', 'message', handler);
+    const provided = registry.register('twitch', 'chat.platform', chatSlot, 'twitch:roman', {
+      info: { channel: 'a' },
+    });
+    expect(() => {
+      provided.push('message', { text: '' });
+    }).toThrow(ValidationError);
+    expect(() => {
+      provided.push('nope', {});
+    }).toThrow(AccessError);
+    await bus.idle();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('reports updated and ignores push and update after dispose', async () => {
+    const { bus, registry, view } = setup();
+    const changes: string[] = [];
+    const handler = vi.fn();
+    view.onChange((change) => changes.push(change.change));
+    view.on('chat', 'message', handler);
+    const provided = registry.register('twitch', 'chat.platform', chatSlot, 'twitch:roman', {
+      info: { channel: 'a' },
+    });
+    provided.update({ channel: 'b' });
+    provided.dispose();
+    provided.push('message', { text: 'late' });
+    provided.update({ channel: 'c' });
+    await bus.idle();
+    expect(changes).toEqual(['added', 'updated', 'removed']);
+    expect(view.list()).toEqual([]);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('drops a push nobody handles', async () => {
+    const { bus, registry } = setup();
+    const provided = registry.register('twitch', 'chat.platform', chatSlot, 'twitch:roman', {
+      info: { channel: 'a' },
+    });
+    provided.push('message', { text: 'x' });
+    await expect(bus.idle()).resolves.toBeUndefined();
+  });
+});
+
+describe('ProviderRegistry inbound order', () => {
+  it('keeps one FIFO per owner across inbound names', async () => {
+    const contracts = new ContractRegistry();
+    const bus = new EventBus({ contracts, logger: createMemoryLogger() });
+    const registry = new ProviderRegistry({ contracts, bus });
+    const slot = {
+      inbound: { message: z.object({ id: z.string() }), deleted: z.object({ id: z.string() }) },
+    };
+    const view = registry.view('chat.platform');
+    const seen: string[] = [];
+    view.on('chat', 'message', async (payload) => {
+      await delay(5);
+      seen.push(`message ${JSON.stringify(payload)}`);
+    });
+    view.on('chat', 'deleted', (payload) => {
+      seen.push(`deleted ${JSON.stringify(payload)}`);
+    });
+    const provided = registry.register('twitch', 'chat.platform', slot, 'twitch:roman', {});
+    provided.push('message', { id: '1' });
+    provided.push('deleted', { id: '1' });
+    await bus.idle();
+    expect(seen).toEqual(['message {"id":"1"}', 'deleted {"id":"1"}']);
   });
 });

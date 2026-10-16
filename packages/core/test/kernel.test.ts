@@ -63,7 +63,9 @@ function listenerPlugin(options: { heard: number[]; disposed?: string[] }) {
         n < 0 ? veto('negative') : { n: n + 1 },
       );
       ctx.provide('counter.sink', 'listener:main', {
-        write: ({ text }) => Promise.resolve({ id: `id-${text}` }),
+        methods: {
+          write: ({ text }) => Promise.resolve({ id: `id-${text}` }),
+        },
       });
       ctx.onDispose(() => {
         options.disposed?.push('first');
@@ -133,7 +135,9 @@ describe('Kernel', () => {
       dependencies: [counterContract],
       setup(ctx) {
         ctx.provide('counter.sink', 'listener:main', {
-          write: () => Promise.resolve({ id: 'x' }),
+          methods: {
+            write: () => Promise.resolve({ id: 'x' }),
+          },
         });
         ctx.hook('counter.beforeTick', () => ({ n: 100 }));
         ctx.on('counter.ticked', (event) => {
@@ -170,7 +174,9 @@ describe('Kernel', () => {
             await delay(20);
             try {
               ctx.provide('counter.sink', 'listener:main', {
-                write: () => Promise.resolve({ id: 'late' }),
+                methods: {
+                  write: () => Promise.resolve({ id: 'late' }),
+                },
               });
             } catch (error) {
               lateError = error;
@@ -209,7 +215,9 @@ describe('Kernel', () => {
     expect(() => stale.on('counter.ticked', () => undefined)).toThrow(PluginUnavailableError);
     expect(() =>
       stale.provide('counter.sink', 'listener:main', {
-        write: () => Promise.resolve({ id: 'stale' }),
+        methods: {
+          write: () => Promise.resolve({ id: 'stale' }),
+        },
       }),
     ).toThrow(PluginUnavailableError);
     expect(() => {
@@ -393,6 +401,41 @@ describe('Kernel RPC registration', () => {
     await expect(kernel.callFromClient('ping.ping', undefined, panelCall)).rejects.toBeInstanceOf(
       PluginUnavailableError,
     );
+  });
+});
+
+describe('Kernel provider inbound', () => {
+  it('runs owner handlers as the owner and counts a throwing one toward its health', async () => {
+    const kernel = new Kernel({ logger: createMemoryLogger(), health: { threshold: 1 } });
+    const seen: string[] = [];
+    await kernel.start(
+      definePlugin(counterContract, {
+        setup(ctx) {
+          ctx.providers('counter.sink').on('written', ({ text }, provider) => {
+            seen.push(`${text} from ${provider.key} as ${currentPlugin() ?? 'nobody'}`);
+            if (text === 'boom') throw new Error('handler broke');
+          });
+          return { rpc: { double: ({ n }) => n * 2 } };
+        },
+      }),
+    );
+    await kernel.start(
+      definePlugin(listenerContract, {
+        dependencies: [counterContract],
+        setup(ctx) {
+          const provided = ctx.provide('counter.sink', 'listener:main', {});
+          provided.push('written', { text: 'hello' });
+          provided.push('written', { text: 'boom' });
+        },
+      }),
+    );
+    await kernel.idle();
+    expect(seen).toEqual([
+      'hello from listener:main as counter',
+      'boom from listener:main as counter',
+    ]);
+    expect(kernel.isDegraded('counter')).toBe(true);
+    expect(kernel.isDegraded('listener')).toBe(false);
   });
 });
 

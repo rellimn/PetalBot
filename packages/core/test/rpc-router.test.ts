@@ -102,7 +102,7 @@ describe('RPC Result boundaries', () => {
     contracts.register(resultContract);
     const providers = new ProviderRegistry({ contracts });
     providers.register('source', 'clock.source', resultContract.providers.source, 'one', {
-      read: () => Promise.resolve(fail(late, { at: timestamp })),
+      methods: { read: () => Promise.resolve(fail(late, { at: timestamp })) },
     });
     const rpc = new RpcRouter({ contracts, timeoutMs: 1000 });
     rpc.register('clock.read', async () => {

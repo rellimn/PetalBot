@@ -25,8 +25,22 @@ export const chatContract = defineContract({
   },
   providers: {
     platform: {
-      send: { input: z.object({ text: z.string() }), output: z.object({ messageId: z.string() }) },
-      timeout: { input: z.object({ user: z.string(), seconds: z.number() }), output: z.object({}) },
+      key: z.string().regex(/^[a-z]+:.+$/),
+      info: z.object({ channel: z.string(), isDefault: z.boolean().default(false) }),
+      methods: {
+        send: {
+          input: z.object({ text: z.string() }),
+          output: z.object({ messageId: z.string() }),
+        },
+        timeout: {
+          input: z.object({ user: z.string(), seconds: z.number() }),
+          output: z.object({}),
+        },
+      },
+      inbound: { message: z.object({ text: z.string() }) },
+    },
+    bare: {
+      methods: { ping: { input: z.object({}), output: z.object({}) } },
     },
   },
 });

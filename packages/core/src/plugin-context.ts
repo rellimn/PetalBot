@@ -20,7 +20,7 @@ import { errorMessage, ownerOf, splitName } from './names.ts';
 import { runInPlugin } from './plugin-scope.ts';
 import { isRoutePath, type PluginRouteTable } from './plugin-routes.ts';
 import type { PluginSecrets, SecretListener } from './plugin-secrets.ts';
-import type { ProviderRegistry, RawProviderImpl } from './provider-registry.ts';
+import type { ProviderRegistry, RawProvideOptions, RawProvided } from './provider-registry.ts';
 import type { RpcRouter } from './rpc-router.ts';
 import type { KernelStorage } from './storage/storage.ts';
 import { parseOrThrow } from './validate.ts';
@@ -86,7 +86,7 @@ export interface RuntimeContext {
   hook(name: string, handler: RawHookHandler, options?: HookOptions): () => void;
   runHook(name: string, input: unknown): Promise<unknown>;
   call(name: string, input: unknown, options?: CallOptions): Promise<unknown>;
-  provide(slot: string, key: string, impl: RawProviderImpl): () => void;
+  provide(slot: string, key: string, options?: RawProvideOptions): RawProvided;
   providers(slot: string): unknown;
   isRunning(pluginId: string): boolean;
   lock(key: string, fn: () => MaybePromise<unknown>): Promise<unknown>;
@@ -306,25 +306,38 @@ export function createPluginContext(options: CreateContextOptions): RuntimeConte
       assertOwner(name, false, true, 'call');
       return await services.rpc.call(pluginId, name, input, callOptions);
     },
-    provide(slot, key, impl) {
+    provide(slot, key, provideOptions = {}) {
       assertLive();
       assertOwner(slot, false, true, 'provide');
       const [owner, member] = splitName(slot) ?? ['', ''];
       const slotDef = dependencies.find((c) => c.id === owner)?.providers?.[member];
       if (!slotDef) throw new AccessError(`Unknown provider slot "${slot}"`);
-      return track(services.providers.register(pluginId, slot, slotDef, key, impl));
+      const provided = services.providers.register(pluginId, slot, slotDef, key, provideOptions);
+      track(() => {
+        provided.dispose();
+      });
+      return provided;
     },
     providers(slot) {
       assertLive();
       assertOwner(slot, true, false, 'resolve providers of');
       const member = splitName(slot)?.[1] ?? '';
-      if (!definition.contract.providers?.[member]) {
+      const slotDef = definition.contract.providers?.[member];
+      if (!slotDef) {
         throw new AccessError(`Unknown provider slot "${slot}"`);
       }
       const view = services.providers.view(slot);
       return {
         keys: () => view.keys(),
         get: (key: string) => view.get(key),
+        list: () => view.list(),
+        on: (name: string, handler: Parameters<typeof view.on>[2]) => {
+          assertLive();
+          if (!Object.hasOwn(slotDef.inbound ?? {}, name)) {
+            throw new AccessError(`Slot "${slot}" has no inbound "${name}"`);
+          }
+          return track(view.on(pluginId, name, handler));
+        },
         onChange: (listener: (change: ProviderChange) => void) => {
           assertLive();
           return track(

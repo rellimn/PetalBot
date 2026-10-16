@@ -1,13 +1,13 @@
 /**
- * The stream domain's server side: connections, ingest, the activity buffer and live status.
+ * The stream domain's server side: connections, pushed events, the activity buffer and live status.
  *
- * The providing platform plugin calls `stream.ingest`; stream emits the matching event and
- * keeps the last ones for the Activity widget.
+ * A connection is a live `stream.platform` provider. Its pushes become the matching events,
+ * and stream keeps the last ones for the Activity widget.
  *
  * Guide: docs/plugin-guide.md#12-platforms-and-providers.
  */
 import { randomUUID } from 'node:crypto';
-import { AccessError, ValidationError, definePlugin } from '@petalbot/sdk';
+import { definePlugin, sourceOf } from '@petalbot/sdk';
 import {
   streamContract,
   type Activity,
@@ -19,19 +19,23 @@ import { RECENT_LIMIT } from './limits.ts';
 export default definePlugin(streamContract, {
   setup(ctx) {
     const providers = ctx.providers('stream.platform');
-    /** Registered connections by id: the plugin that provides each, and its live status. */
-    const registered = new Map<
-      string,
-      { readonly platform: string; readonly by: string; status: ConnectionStatus }
-    >();
+    /** Live status per connection: from the info, then from online/offline pushes. */
+    const status = new Map<string, ConnectionStatus>();
     let recent: Activity[] = [];
 
-    // A provider that goes away (disposed, or its plugin stopped) takes its connection along.
-    providers.onChange(({ key, pluginId, change }) => {
-      if (change === 'removed' && registered.get(key)?.by === pluginId) {
-        registered.delete(key);
-        ctx.emit('stream.connectionsChanged', {});
-      }
+    const fromInfo = (info: { live: boolean; since?: number | undefined }): ConnectionStatus =>
+      info.live && info.since !== undefined
+        ? { live: true, since: info.since }
+        : { live: info.live };
+
+    // Connections that are already there when stream (re)starts keep their status.
+    for (const provider of providers.list()) status.set(provider.key, fromInfo(provider.info));
+
+    providers.onChange(({ key, change }) => {
+      const provider = providers.get(key);
+      if (change === 'removed' || !provider) status.delete(key);
+      else status.set(key, fromInfo(provider.info));
+      ctx.emit('stream.connectionsChanged', {});
     });
 
     /** Emits the event under its own name; the event's schema strips `type`. */
@@ -61,53 +65,30 @@ export default definePlugin(streamContract, {
       }
     };
 
+    providers.on('event', (pushed, provider) => {
+      const event: StreamEvent = { ...pushed, source: sourceOf(provider.key) };
+      const now = Date.now();
+      const current = status.get(provider.key);
+      if (event.type === 'online') {
+        // A repeated online (a redelivery) keeps the start time it already has.
+        const since = event.since ?? (current?.live ? (current.since ?? now) : now);
+        status.set(provider.key, { live: true, since });
+      }
+      if (event.type === 'offline') status.set(provider.key, { live: false });
+      recent = [{ id: randomUUID(), timestamp: now, event }, ...recent].slice(0, RECENT_LIMIT);
+      announce(event);
+    });
+
     return {
       rpc: {
         recent: () => recent,
-
-        status: () => Object.fromEntries([...registered].map(([id, { status }]) => [id, status])),
-
-        registerConnection: ({ id, platform, live, since }, { caller }) => {
-          if (!id.startsWith(`${platform}:`)) {
-            throw new ValidationError('stream connection', [
-              {
-                code: 'custom',
-                path: ['id'],
-                message: `A ${platform} connection id starts with "${platform}:"`,
-                input: id,
-              },
-            ]);
-          }
-          if (providers.get(id)?.pluginId !== caller) {
-            throw new AccessError(
-              `Plugin "${caller}" does not provide "stream.platform" for "${id}" (call ctx.provide first)`,
-            );
-          }
-          const status = live ? { live, ...(since === undefined ? {} : { since }) } : { live };
-          registered.set(id, { platform, by: caller, status });
-          ctx.emit('stream.connectionsChanged', {});
-          return {};
-        },
-
-        ingest: (event, { caller }) => {
-          const { connection, platform } = event.source;
-          const entry = registered.get(connection);
-          if (entry?.by !== caller || entry.platform !== platform) {
-            throw new AccessError(
-              `Plugin "${caller}" has not registered the stream connection "${connection}"`,
-            );
-          }
-          const now = Date.now();
-          if (event.type === 'online') {
-            // A repeated online (a redelivery) keeps the start time it already has.
-            const since = event.since ?? (entry.status.live ? (entry.status.since ?? now) : now);
-            entry.status = { live: true, since };
-          }
-          if (event.type === 'offline') entry.status = { live: false };
-          recent = [{ id: randomUUID(), timestamp: now, event }, ...recent].slice(0, RECENT_LIMIT);
-          announce(event);
-          return {};
-        },
+        status: () =>
+          Object.fromEntries(
+            providers.list().flatMap(({ key }) => {
+              const entry = status.get(key);
+              return entry ? [[key, entry]] : [];
+            }),
+          ),
       },
     };
   },

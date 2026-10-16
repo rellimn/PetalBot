@@ -1,6 +1,6 @@
 import { describe, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
-import { defineContract, definePlugin, type Disposer, type ProviderHandle } from '@petalbot/sdk';
+import { defineContract, definePlugin, type ProviderHandle, type Provided } from '@petalbot/sdk';
 import { createTestHarness } from '../src/harness.ts';
 
 const chatContract = defineContract({
@@ -8,7 +8,14 @@ const chatContract = defineContract({
   version: '1.0.0',
   providers: {
     platform: {
-      send: { input: z.object({ text: z.string() }), output: z.object({ messageId: z.string() }) },
+      info: z.object({ channel: z.string() }),
+      methods: {
+        send: {
+          input: z.object({ text: z.string() }),
+          output: z.object({ messageId: z.string() }),
+        },
+      },
+      inbound: { message: z.object({ text: z.string() }) },
     },
   },
 });
@@ -31,18 +38,29 @@ describe('harness types', () => {
   it('types fake providers from the own slots', async () => {
     const harness = await createTestHarness(chat, {
       providers: {
-        'chat.platform': { 'twitch:test': { send: () => Promise.resolve({ messageId: '1' }) } },
+        'chat.platform': {
+          'twitch:test': {
+            info: { channel: 'test' },
+            methods: { send: () => Promise.resolve({ messageId: '1' }) },
+          },
+        },
       },
     });
     // @ts-expect-error -- not a slot of the plugin under test
     await createTestHarness(chat, { providers: { 'chat.nope': {} } });
     expectTypeOf(
       harness.addProvider('chat.platform', 'k', {
-        send: () => Promise.resolve({ messageId: '2' }),
+        info: { channel: 'k' },
+        methods: { send: () => Promise.resolve({ messageId: '2' }) },
       }),
-    ).toEqualTypeOf<Disposer>();
-    // @ts-expect-error -- wrong output shape
-    harness.addProvider('chat.platform', 'k', { send: () => Promise.resolve({ id: 2 }) });
+    ).toEqualTypeOf<Provided<(typeof chatContract)['providers']['platform']>>();
+    harness.addProvider('chat.platform', 'k', {
+      info: { channel: 'k' },
+      // @ts-expect-error -- wrong output shape
+      methods: { send: () => Promise.resolve({ id: 2 }) },
+    });
+    // @ts-expect-error -- the slot declares info
+    harness.addProvider('chat.platform', 'k', {});
     // @ts-expect-error -- chat implements no dependency slot
     harness.provider('chat.platform', 'k');
   });
@@ -54,6 +72,9 @@ describe('harness types', () => {
     const handle = harness.provider('chat.platform', 'twitch:x');
     expectTypeOf(handle).toEqualTypeOf<
       ProviderHandle<(typeof chatContract)['providers']['platform']> | undefined
+    >();
+    expectTypeOf(harness.pushed('chat.platform', 'twitch:x')).toEqualTypeOf<
+      readonly { readonly name: 'message'; readonly payload: { text: string } }[]
     >();
     if (handle) {
       expectTypeOf(await handle.call('send', { text: 'hi' })).toEqualTypeOf<{

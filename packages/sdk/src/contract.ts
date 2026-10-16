@@ -96,7 +96,20 @@ export interface InternalSecretDef {
 export type SecretDef = UserSecretDef | InternalSecretDef;
 export type SecretDefs = Readonly<Record<string, SecretDef>>;
 
-export type ProviderSlotDef = Readonly<Record<string, ProviderMethodDef>>;
+/**
+ * A provider slot: dependents register providers under a key; the owner calls their `methods`
+ * and receives their `inbound` pushes. Every part is optional.
+ */
+export interface ProviderSlotDef {
+  /** Schema of the keys providers register under, e.g. a connection id. */
+  readonly key?: z.ZodType<string>;
+  /** Metadata each provider registers with (and may update); required when declared. */
+  readonly info?: z.ZodObject;
+  /** Owner -> provider. Every method is optional for implementers. */
+  readonly methods?: Readonly<Record<string, ProviderMethodDef>>;
+  /** Provider -> owner: what providers push, by name. */
+  readonly inbound?: Readonly<Record<string, z.ZodType>>;
+}
 
 /**
  * An overlay's scope and instance config. It lives in the contract because the server
@@ -215,12 +228,13 @@ export type CheckChoices<C extends ContractShape> = [
       >;
     };
 
+type SlotMethodsOf<S> = S extends { methods: infer M } ? M : never;
 type OutputOf<D> = D extends { output: infer O extends z.ZodType } ? z.output<O> : never;
 type ValuesOf<M> = M[keyof M];
 /** Failures that RPCs and provider methods return directly (nested ones are checked at runtime). */
 type ContractFailures<C> = Extract<
   | (C extends { rpc: infer R } ? OutputOf<ValuesOf<R>> : never)
-  | (C extends { providers: infer P } ? OutputOf<ValuesOf<ValuesOf<P>>> : never),
+  | (C extends { providers: infer P } ? OutputOf<ValuesOf<SlotMethodsOf<ValuesOf<P>>>> : never),
   Failure
 >;
 type DuplicateCodes<F extends Failure> = {
@@ -300,11 +314,7 @@ export function checkContract(shape: ContractShape): void {
       );
     }
   }
-  for (const [slot, methods] of Object.entries(shape.providers ?? {})) {
-    for (const [method, def] of Object.entries(methods)) {
-      checkTimeout(shape, `Provider method "${slot}.${method}"`, def.timeoutMs);
-    }
-  }
+  for (const [slot, def] of Object.entries(shape.providers ?? {})) checkSlot(shape, slot, def);
   for (const name of Object.keys(shape.widgets ?? {})) {
     if (!ID_PATTERN.test(name)) {
       throw new Error(
@@ -353,6 +363,22 @@ function checkRpcFlow(contract: ContractShape, member: string, def: RpcDef): voi
   }
 }
 
+const SLOT_PARTS: ReadonlySet<string> = new Set(['key', 'info', 'methods', 'inbound']);
+
+function checkSlot(contract: ContractShape, slot: string, def: ProviderSlotDef): void {
+  const where = `Provider slot "${slot}" of contract "${contract.id}"`;
+  for (const part of Object.keys(def)) {
+    if (!SLOT_PARTS.has(part)) throw new Error(`${where}: move methods under "methods"`);
+  }
+  for (const [method, methodDef] of Object.entries(def.methods ?? {})) {
+    if (!MEMBER_PATTERN.test(method)) throw new Error(`${where}: invalid method name "${method}"`);
+    checkTimeout(contract, `Provider method "${slot}.${method}"`, methodDef.timeoutMs);
+  }
+  for (const name of Object.keys(def.inbound ?? {})) {
+    if (!MEMBER_PATTERN.test(name)) throw new Error(`${where}: invalid inbound name "${name}"`);
+  }
+}
+
 const MAX_TIMEOUT_MS = 120_000;
 
 function checkTimeout(contract: ContractShape, what: string, timeoutMs: number | undefined): void {
@@ -375,9 +401,11 @@ function checkFailureCodes(contract: ContractShape): void {
     ...Object.values(contract.rpc ?? {}).flatMap((def) =>
       def.input === undefined ? [def.output] : [def.input, def.output],
     ),
-    ...Object.values(contract.providers ?? {}).flatMap((slot) =>
-      Object.values(slot).flatMap((method) => [method.input, method.output]),
-    ),
+    ...Object.values(contract.providers ?? {}).flatMap((slot) => [
+      ...Object.values(slot.methods ?? {}).flatMap((method) => [method.input, method.output]),
+      ...Object.values(slot.inbound ?? {}),
+      ...(slot.info === undefined ? [] : [slot.info]),
+    ]),
   ];
   const codes = new Map<string, FailureDefinition>();
   for (const schema of schemas) {

@@ -117,6 +117,8 @@ export class Kernel {
     });
     this.#providers = new ProviderRegistry({
       contracts: this.#contracts,
+      bus: this.#bus,
+      logger: options.logger,
       ...(options.providerTimeoutMs === undefined ? {} : { timeoutMs: options.providerTimeoutMs }),
     });
     this.routes = new PluginRouteTable({

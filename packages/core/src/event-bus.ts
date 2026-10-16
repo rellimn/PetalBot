@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { monotonicFactory } from 'ulid';
 import { AccessError, type EventEnvelope, type Logger, type MaybePromise } from '@petalbot/sdk';
-import { currentActor, outsideActor, runAsActor } from './actor-scope.ts';
+import { currentActor, outsideActor, runAsActor, type ActorContext } from './actor-scope.ts';
 import type { ContractRegistry } from './contract-registry.ts';
 import { once } from './disposer-scope.ts';
 import { errorMessage } from './names.ts';
@@ -19,6 +19,18 @@ interface Subscription {
   readonly queue: EventEnvelope[];
   draining: boolean;
   active: boolean;
+}
+
+/** A core-internal FIFO delivery queue (provider pushes). */
+export interface Channel<T> {
+  push(item: T): void;
+  dispose(): void;
+}
+
+interface Queued<T> {
+  readonly item: T;
+  readonly cause: EventEnvelope | undefined;
+  readonly actor: ActorContext | undefined;
 }
 
 export interface EventBusOptions {
@@ -131,6 +143,67 @@ export class EventBus {
         });
       }
     }
+  }
+
+  /**
+   * Core-internal: a FIFO queue whose items run `handler` as `pluginId`, with the causation and
+   * actor of the code that pushed them. Items count for `idle()`; a throwing handler is logged
+   * and reported like an event handler. `dispose` drops queued items.
+   */
+  channel<T>(
+    pluginId: string,
+    label: string,
+    handler: (item: T) => MaybePromise<void>,
+  ): Channel<T> {
+    const queue: Queued<T>[] = [];
+    let draining = false;
+    let active = true;
+    const drain = async (): Promise<void> => {
+      while (active) {
+        const entry = queue.shift();
+        if (!entry) break;
+        try {
+          await runInPlugin(pluginId, () =>
+            this.#withCause(entry.cause, () =>
+              entry.actor
+                ? runAsActor(entry.actor, () => handler(entry.item))
+                : outsideActor(() => handler(entry.item)),
+            ),
+          );
+        } catch (error) {
+          this.#logger.error('Inbound handler failed', {
+            plugin: pluginId,
+            channel: label,
+            error: errorMessage(error),
+          });
+          this.#onHandlerError?.(pluginId, error);
+        }
+        this.#settle(1);
+      }
+      draining = false;
+    };
+    return {
+      push: (item) => {
+        if (!active) return;
+        queue.push({ item, cause: this.#causation.getStore(), actor: currentActor() });
+        this.#pending += 1;
+        if (!draining) {
+          draining = true;
+          outsidePlugin(() => {
+            queueMicrotask(() => void drain());
+          });
+        }
+      },
+      dispose: once(() => {
+        active = false;
+        this.#settle(queue.length);
+        queue.length = 0;
+      }),
+    };
+  }
+
+  #withCause<R>(cause: EventEnvelope | undefined, fn: () => R): R {
+    return cause ? this.#causation.run(cause, fn) : this.#causation.exit(fn);
   }
 
   /** Core-internal: observe every event (event log, inspector). */

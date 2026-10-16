@@ -207,12 +207,18 @@ const sinkContract = defineContract({
   version: '1.0.0',
   providers: {
     target: {
-      write: { input: z.object({ text: z.string() }), output: z.object({ id: z.string() }) },
+      info: z.object({ label: z.string() }),
+      methods: {
+        write: { input: z.object({ text: z.string() }), output: z.object({ id: z.string() }) },
+      },
+      inbound: { written: z.object({ text: z.string() }) },
     },
   },
   rpc: {
     keys: { kind: 'query', output: z.array(z.string()) },
     keysAtStart: { kind: 'query', output: z.array(z.string()) },
+    labels: { kind: 'query', output: z.array(z.string()) },
+    received: { kind: 'query', output: z.array(z.string()) },
     write: {
       input: z.object({ key: z.string(), text: z.string() }),
       output: Result(z.object({ id: z.string() }), [providerNotFound]),
@@ -223,8 +229,18 @@ const sinkContract = defineContract({
 const sink = definePlugin(sinkContract, {
   setup(ctx) {
     const atStart = ctx.providers('sink.target').keys();
+    const received: string[] = [];
+    ctx.providers('sink.target').on('written', ({ text }, provider) => {
+      received.push(`${provider.key}:${text}`);
+    });
     return {
       rpc: {
+        labels: () =>
+          ctx
+            .providers('sink.target')
+            .list()
+            .map((provider) => provider.info.label),
+        received: () => received,
         keys: () => ctx.providers('sink.target').keys(),
         keysAtStart: () => atStart,
         write: async ({ key, text }) => {
@@ -241,7 +257,12 @@ describe('createTestHarness provider fakes', () => {
   it('registers fake providers before the slot owner starts', async () => {
     const harness = await createTestHarness(sink, {
       providers: {
-        'sink.target': { 'fake:a': { write: ({ text }) => Promise.resolve({ id: `a-${text}` }) } },
+        'sink.target': {
+          'fake:a': {
+            info: { label: 'A' },
+            methods: { write: ({ text }) => Promise.resolve({ id: `a-${text}` }) },
+          },
+        },
       },
     });
     expect(await harness.call('sink.keysAtStart')).toEqual(['fake:a']);
@@ -252,13 +273,18 @@ describe('createTestHarness provider fakes', () => {
     await harness.stop();
   });
 
-  it('adds and removes providers mid-test', async () => {
+  it('adds providers mid-test, pushes through them and removes them', async () => {
     const harness = await createTestHarness(sink);
-    const remove = harness.addProvider('sink.target', 'fake:b', {
-      write: () => Promise.resolve({ id: 'b' }),
+    const provided = harness.addProvider('sink.target', 'fake:b', {
+      info: { label: 'B' },
+      methods: { write: () => Promise.resolve({ id: 'b' }) },
     });
     expect(await harness.call('sink.keys')).toEqual(['fake:b']);
-    remove();
+    expect(await harness.call('sink.labels')).toEqual(['B']);
+    provided.push('written', { text: 'hi' });
+    await harness.idle();
+    expect(await harness.call('sink.received')).toEqual(['fake:b:hi']);
+    provided.dispose();
     expect(await harness.call('sink.keys')).toEqual([]);
     await harness.stop();
   });
@@ -267,14 +293,24 @@ describe('createTestHarness provider fakes', () => {
     const writer = definePlugin(defineContract({ id: 'writer', version: '1.0.0' }), {
       dependencies: [sinkContract],
       setup(ctx) {
-        ctx.provide('sink.target', 'writer:main', {
-          write: ({ text }) => Promise.resolve({ id: text.toUpperCase() }),
+        const provided = ctx.provide('sink.target', 'writer:main', {
+          info: { label: 'Writer' },
+          methods: { write: ({ text }) => Promise.resolve({ id: text.toUpperCase() }) },
         });
+        provided.push('written', { text: 'hello' });
+        provided.push('written', { text: 'again' });
       },
     });
     const harness = await createTestHarness(writer);
+    await harness.idle();
+    expect(harness.pushed('sink.target', 'writer:main')).toEqual([
+      { name: 'written', payload: { text: 'hello' } },
+      { name: 'written', payload: { text: 'again' } },
+    ]);
+    expect(harness.pushed('sink.target', 'nope')).toEqual([]);
     const handle = harness.provider('sink.target', 'writer:main');
     expect(handle?.pluginId).toBe('writer');
+    expect(handle?.info).toEqual({ label: 'Writer' });
     expect(handle?.methods).toEqual(['write']);
     expect(await handle?.call('write', { text: 'hi' })).toEqual({ id: 'HI' });
     expect(harness.provider('sink.target', 'nope')).toBeUndefined();

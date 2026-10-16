@@ -1,46 +1,40 @@
 /**
- * Server tests for the stream domain. The harness provides `stream.platform` for twitch:roman
- * and calls from the same plugin, so it acts as the platform.
+ * Server tests for the stream domain. The harness adds the `stream.platform` provider for
+ * twitch:roman and pushes through it, so it acts as the platform.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AccessError, ValidationError, defineContract, definePlugin } from '@petalbot/sdk';
+import { ValidationError, defineContract, definePlugin } from '@petalbot/sdk';
 import { createTestHarness } from '@petalbot/testing';
-import { streamContract, type StreamEvent } from '../src/contract.ts';
+import { streamContract, type InboundStreamEvent } from '../src/contract.ts';
 import { RECENT_LIMIT } from '../src/limits.ts';
 import stream from '../src/server.ts';
 
 const source = { platform: 'twitch', connection: 'twitch:roman' };
-const twitch = { id: 'twitch:roman', platform: 'twitch', channel: 'roman', displayName: 'roman' };
+const twitch = { channel: 'roman', displayName: 'roman' };
 const viewer = { id: 'u1', login: 'viewer', displayName: 'Viewer' };
 
-async function connected() {
-  const harness = await createTestHarness(stream, {
-    providers: { 'stream.platform': { 'twitch:roman': {} } },
+async function connected(info: { live?: boolean; since?: number } = {}) {
+  const harness = await createTestHarness(stream);
+  const provided = harness.addProvider('stream.platform', 'twitch:roman', {
+    info: { ...twitch, ...info },
   });
-  await harness.call('stream.registerConnection', twitch);
-  return harness;
+  return Object.assign(harness, { provided });
 }
 
-/** A second platform plugin that provides `key`, and its ctx. */
+/** A second platform plugin that provides `key`. */
 async function startPlatform(harness: Awaited<ReturnType<typeof connected>>, key: string) {
-  type Ctx = Parameters<
-    ReturnType<
-      typeof definePlugin<{ id: 'kick'; version: '1.0.0' }, [typeof streamContract], []>
-    >['setup']
-  >[0];
-  const holder: { ctx?: Ctx } = {};
   await harness.kernel.start(
     definePlugin(defineContract({ id: 'kick', version: '1.0.0' }), {
       dependencies: [streamContract],
       setup(ctx) {
-        ctx.provide('stream.platform', key, {});
-        holder.ctx = ctx;
+        ctx.provide('stream.platform', key, { info: twitch });
       },
     }),
   );
-  if (!holder.ctx) throw new Error('kick did not start');
-  return holder.ctx;
 }
+
+const changes = (harness: Awaited<ReturnType<typeof connected>>) =>
+  harness.events.filter((event) => event.name === 'stream.connectionsChanged');
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
@@ -52,34 +46,33 @@ afterEach(() => {
 });
 
 describe('stream', () => {
-  it('emits each ingested event under its own name, without the type', async () => {
+  it('emits each pushed event under its own name, with the source and without the type', async () => {
     const harness = await connected();
-    const events: StreamEvent[] = [
-      { type: 'online', source, title: 'Hello', category: 'Chess' },
-      { type: 'follow', source, user: viewer },
-      { type: 'subscription', source, user: viewer, tier: 1, months: 3, message: 'hi' },
-      { type: 'giftSubscription', source, count: 5, tier: 2 },
-      { type: 'raid', source, from: viewer, viewers: 42 },
-      { type: 'support', source, user: viewer, amount: 500, currency: 'bits' },
-      { type: 'offline', source },
+    const events: InboundStreamEvent[] = [
+      { type: 'online', title: 'Hello', category: 'Chess' },
+      { type: 'follow', user: viewer },
+      { type: 'subscription', user: viewer, tier: 1, months: 3, message: 'hi' },
+      { type: 'giftSubscription', count: 5, tier: 2 },
+      { type: 'raid', from: viewer, viewers: 42 },
+      { type: 'support', user: viewer, amount: 500, currency: 'bits' },
+      { type: 'offline' },
     ];
-    for (const event of events) await harness.call('stream.ingest', event);
+    for (const event of events) harness.provided.push('event', event);
     await harness.idle();
-    expect(harness.events.slice(1).map((event) => [event.name, event.payload])).toEqual(
-      events.map(({ type, ...payload }) => [`stream.${type}`, payload]),
-    );
+    expect(
+      harness.events
+        .filter((event) => event.name !== 'stream.connectionsChanged')
+        .map((event) => [event.name, event.payload]),
+    ).toEqual(events.map(({ type, ...payload }) => [`stream.${type}`, { ...payload, source }]));
     await harness.stop();
   });
 
   it('keeps the last events newest first', async () => {
     const harness = await connected();
     for (let n = 1; n <= RECENT_LIMIT + 1; n += 1) {
-      await harness.call('stream.ingest', {
-        type: 'follow',
-        source,
-        user: { ...viewer, id: `u${String(n)}` },
-      });
+      harness.provided.push('event', { type: 'follow', user: { ...viewer, id: `u${String(n)}` } });
     }
+    await harness.idle();
     const recent = await harness.call('stream.recent');
     expect(recent).toHaveLength(RECENT_LIMIT);
     expect(recent[0]).toEqual({
@@ -96,11 +89,13 @@ describe('stream', () => {
     await expect(harness.call('stream.status')).resolves.toEqual({
       'twitch:roman': { live: false },
     });
-    await harness.call('stream.ingest', { type: 'online', source });
+    harness.provided.push('event', { type: 'online' });
+    await harness.idle();
     await expect(harness.call('stream.status')).resolves.toEqual({
       'twitch:roman': { live: true, since: 10_000 },
     });
-    await harness.call('stream.ingest', { type: 'offline', source });
+    harness.provided.push('event', { type: 'offline' });
+    await harness.idle();
     await expect(harness.call('stream.status')).resolves.toEqual({
       'twitch:roman': { live: false },
     });
@@ -109,8 +104,9 @@ describe('stream', () => {
 
   it("takes the platform's start time and keeps it on a repeated online", async () => {
     const harness = await connected();
-    await harness.call('stream.ingest', { type: 'online', source, since: 4_000 });
-    await harness.call('stream.ingest', { type: 'online', source });
+    harness.provided.push('event', { type: 'online', since: 4_000 });
+    harness.provided.push('event', { type: 'online' });
+    await harness.idle();
     await expect(harness.call('stream.status')).resolves.toEqual({
       'twitch:roman': { live: true, since: 4_000 },
     });
@@ -118,48 +114,57 @@ describe('stream', () => {
   });
 
   it('takes the live status a platform registers with', async () => {
-    const harness = await connected();
-    await harness.call('stream.registerConnection', { ...twitch, live: true, since: 5 });
+    const harness = await connected({ live: true, since: 5 });
     await expect(harness.call('stream.status')).resolves.toEqual({
       'twitch:roman': { live: true, since: 5 },
     });
     await harness.stop();
   });
 
-  it('accepts registrations and events only from the providing plugin', async () => {
+  it('takes live status from update', async () => {
     const harness = await connected();
-    const kick = await startPlatform(harness, 'kick:roman');
-    await expect(kick.call('stream.ingest', { type: 'offline', source })).rejects.toBeInstanceOf(
-      AccessError,
-    );
-    await expect(kick.call('stream.registerConnection', twitch)).rejects.toBeInstanceOf(
-      AccessError,
-    );
-    await expect(
-      harness.call('stream.registerConnection', { ...twitch, platform: 'kick' }),
-    ).rejects.toBeInstanceOf(ValidationError);
-    await expect(
-      harness.call('stream.ingest', {
-        type: 'offline',
-        source: { platform: 'kick', connection: 'twitch:roman' },
-      }),
-    ).rejects.toBeInstanceOf(AccessError);
+    harness.provided.update({ ...twitch, live: true, since: 7 });
+    await expect(harness.call('stream.status')).resolves.toEqual({
+      'twitch:roman': { live: true, since: 7 },
+    });
+    await harness.idle();
+    expect(changes(harness)).toHaveLength(2);
+    await harness.stop();
+  });
+
+  it('rejects a malformed push at the platform and emits nothing', async () => {
+    const harness = await connected();
+    expect(() => {
+      harness.provided.push('event', { type: 'raid', from: viewer, viewers: -1 });
+    }).toThrow(ValidationError);
+    await harness.idle();
     await expect(harness.call('stream.recent')).resolves.toEqual([]);
+    await harness.stop();
+  });
+
+  it('keeps connections and their live status across a stream restart', async () => {
+    const harness = await connected({ live: true, since: 5 });
+    await harness.kernel.stop('stream');
+    await harness.kernel.start(stream);
+    await expect(harness.call('stream.status')).resolves.toEqual({
+      'twitch:roman': { live: true, since: 5 },
+    });
     await harness.stop();
   });
 
   it('forgets a connection when its platform plugin stops, and says so', async () => {
     const harness = await connected();
-    const kick = await startPlatform(harness, 'kick:roman');
-    await kick.call('stream.registerConnection', { ...twitch, id: 'kick:roman', platform: 'kick' });
+    await startPlatform(harness, 'kick:roman');
+    await expect(harness.call('stream.status')).resolves.toEqual({
+      'twitch:roman': { live: false },
+      'kick:roman': { live: false },
+    });
     await harness.kernel.stop('kick');
     await expect(harness.call('stream.status')).resolves.toEqual({
       'twitch:roman': { live: false },
     });
     await harness.idle();
-    expect(
-      harness.events.filter((event) => event.name === 'stream.connectionsChanged'),
-    ).toHaveLength(3);
+    expect(changes(harness)).toHaveLength(3);
     await harness.stop();
   });
 });

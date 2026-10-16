@@ -10,12 +10,12 @@ import { renderPluginUi, type FakeServer } from '@petalbot/testing/ui';
 import panel from '../src/panel.tsx';
 import type { ConnectionInfo } from '../src/contract.ts';
 import { RECENT_LIMIT } from '../src/limits.ts';
-import { message, twitch } from './fixtures.ts';
+import { message, twitchConnection } from './fixtures.ts';
 
 const ChatWidget = panel.widgets.find((widget) => widget.id === 'chat')?.component ?? (() => null);
 
 const connection = (overrides: Partial<ConnectionInfo> = {}): ConnectionInfo => ({
-  ...twitch,
+  ...twitchConnection,
   capabilities: ['send', 'reply'],
   ...overrides,
 });

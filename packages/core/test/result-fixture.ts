@@ -12,5 +12,5 @@ export const resultContract = defineContract({
   id: 'clock',
   version: '1.0.0',
   rpc: { read: { output: LateResult } },
-  providers: { source: { read: { input: z.object({}), output: LateResult } } },
+  providers: { source: { methods: { read: { input: z.object({}), output: LateResult } } } },
 });

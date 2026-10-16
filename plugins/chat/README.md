@@ -15,7 +15,7 @@ Depend on it with `"chat": "^2.0.0"` in `petalbot.dependencies` and
 | event `chat.message`                                 | A `ChatMessage`: `id`, `source`, `user` (with `badges`), `text`, `replyTo?`, `timestamp`, `fromBot`.                                                        |
 | event `chat.messageDeleted`                          | `{ source, messageId }`: a moderator or the platform removed a message.                                                                                     |
 | event `chat.connectionsChanged`                      | A connection came, changed or went.                                                                                                                         |
-| hook `chat.beforeSend`                               | `{ connection, text, replyTo?, caller }` before every send and reply; rewrite `text` or veto (`forbidden`).                                                 |
+| hook `chat.beforeSend`                               | `{ connection, text, replyTo?, actor }` before every send and reply; rewrite `text` or veto (`forbidden`).                                                  |
 | `chat.send({ target, text })`                        | `SendResult`. Exposed to the panel (`mod`).                                                                                                                 |
 | `chat.reply({ to, text })`                           | `ReplyResult` (success includes `messageId` and `delivery: 'native' \| 'mention'`); `to` is the message (a whole `ChatMessage` fits).                       |
 | `chat.broadcast({ text, platforms?, connections? })` | One `BroadcastItemResult` per connection, sent in parallel. Without filters: every connection; a requested connection that isn't there answers `not-found`. |
@@ -30,17 +30,18 @@ empty. Skip messages with `fromBot`: they come from the bot's own account.
 
 ## For platform plugins
 
-1. `ctx.provide('chat.platform', '<platform>:<channel>', impl)`: `send`, `reply`, `delete`,
-   `timeout`, all optional, each answering a `Result`. A missing method makes the domain answer
-   `unsupported`; a throwing one, `platform-error`.
-2. `chat.registerConnection({ id, platform, channel, displayName, isDefault })`: only from the
-   plugin providing `id`, and `id` must start with `<platform>:`.
-3. `chat.ingest(message)` and `chat.ingestDeleted({ source, messageId })`: only for connections
-   the calling plugin registered. A message id the domain already has for that connection is
-   dropped (platforms may deliver twice).
+1. `const conn = ctx.provide('chat.platform', '<platform>:<channel>', { info, methods })`. The key is
+   the connection id (its platform comes from the key); `info` is `{ channel, displayName,
+isDefault }`. `methods` are `send`, `reply`, `delete` and `timeout`, all optional, each answering
+   a `Result`. A missing method makes the domain answer `unsupported`; a throwing one, or one that
+   takes longer than its timeout (12 s for `send`/`reply`, 5 s otherwise), `platform-error`.
+2. `conn.push('message', message)` (a `ChatMessage` without `source`; chat adds it from the key) and
+   `conn.push('messageDeleted', { messageId })`. A malformed push throws at once. A message id the
+   domain already has for that connection is dropped (platforms may deliver twice).
+3. `conn.update(info)` replaces the info, e.g. when the default connection changes.
 
-List `chat` as a required dependency: optional dependents aren't restarted with it. A connection ends when its provider is disposed or its plugin stops; register again after
-providing again.
+A connection exists as long as its provider does: it ends when the provider is disposed or its
+plugin stops, and it survives a restart of `chat` without any further call.
 
 ## Panel
 

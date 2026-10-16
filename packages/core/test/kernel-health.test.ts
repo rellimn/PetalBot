@@ -44,9 +44,11 @@ describe('plugin attribution', () => {
             return undefined;
           });
           ctx.provide('counter.sink', 'listener:main', {
-            write: () => {
-              seen.provider = currentPlugin();
-              return Promise.resolve({ id: 'x' });
+            methods: {
+              write: () => {
+                seen.provider = currentPlugin();
+                return Promise.resolve({ id: 'x' });
+              },
             },
           });
           await ctx.call('counter.double', { n: 1 });

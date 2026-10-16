@@ -203,3 +203,56 @@ describe('EventBus', () => {
     expect(scopes).toEqual([undefined]);
   });
 });
+
+describe('EventBus channels', () => {
+  const setup = () => {
+    const contracts = new ContractRegistry();
+    contracts.register(counterContract);
+    contracts.register(listenerContract);
+    return new EventBus({ contracts, logger: createMemoryLogger() });
+  };
+
+  it('delivers items in order, as the channel owner, counted by idle', async () => {
+    const bus = setup();
+    const seen: string[] = [];
+    const channel = bus.channel<string>('counter', 'test', async (item) => {
+      await delay(item === 'a' ? 5 : 0);
+      seen.push(`${item} as ${currentPlugin() ?? 'nobody'}`);
+    });
+    runInPlugin('listener', () => {
+      channel.push('a');
+      channel.push('b');
+    });
+    await bus.idle();
+    expect(seen).toEqual(['a as counter', 'b as counter']);
+  });
+
+  it('keeps the causation of the push for events the handler emits', async () => {
+    const bus = setup();
+    const envelopes: EventEnvelope[] = [];
+    bus.tap((envelope) => envelopes.push(envelope));
+    const channel = bus.channel<string>('counter', 'test', () => {
+      bus.emit('counter', 'counter.ticked', { n: 2 });
+    });
+    bus.subscribe('listener', 'counter.ticked', (event) => {
+      if (event.depth === 0) channel.push('again');
+    });
+    bus.emit('counter', 'counter.ticked', { n: 1 });
+    await bus.idle();
+    expect(envelopes.map((envelope) => envelope.depth)).toEqual([0, 1]);
+    expect(envelopes[1]?.causedBy).toBe(envelopes[0]?.id);
+  });
+
+  it('drops queued items on dispose and settles idle', async () => {
+    const bus = setup();
+    const seen: string[] = [];
+    const channel = bus.channel<string>('counter', 'test', (item) => {
+      seen.push(item);
+    });
+    channel.push('a');
+    channel.dispose();
+    channel.push('b');
+    await bus.idle();
+    expect(seen).toEqual([]);
+  });
+});

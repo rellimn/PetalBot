@@ -121,7 +121,9 @@ const clock = defineContract({
   id: 'clock',
   version: '1.0.0',
   rpc: { read: { output: Result(z.object({}), [late]) } },
-  providers: { source: { read: { input: z.object({}), output: Result(z.object({}), [late]) } } },
+  providers: {
+    source: { methods: { read: { input: z.object({}), output: Result(z.object({}), [late]) } } },
+  },
 });
 
 it('preserves exact producer and consumer types through real contracts', () => {

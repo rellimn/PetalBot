@@ -8,10 +8,10 @@ import type {
   AnyPluginDefinition,
   ContractShape,
   DbSchema,
-  Disposer,
   EventDefsOf,
   EventEnvelope,
   ImplementableSlots,
+  InboundOf,
   KeyedSecretNames,
   KvSchema,
   Logger,
@@ -19,8 +19,9 @@ import type {
   NoMembers,
   OwnedSlots,
   PluginDefinition,
+  ProvideOptions,
+  Provided,
   ProviderHandle,
-  ProviderImpl,
   ProviderSlotDef,
   ProviderView,
   RpcDefsOf,
@@ -52,9 +53,17 @@ type SecretValue<Own extends ContractShape, N> = z.input<
 /** Per own provider slot: fake providers by key, registered before the plugin starts. */
 export type FakeProviders<Own extends ContractShape> = {
   readonly [N in keyof OwnedSlots<Own> & string]?: Readonly<
-    Record<string, ProviderImpl<OwnSlot<Own, N>>>
+    Record<string, ProvideOptions<OwnSlot<Own, N>>>
   >;
 };
+
+/** One push a provider made, as the slot owner received it. */
+export type Pushed<Slot extends ProviderSlotDef> = {
+  readonly [K in keyof InboundOf<Slot> & string]: {
+    readonly name: K;
+    readonly payload: z.output<InboundOf<Slot>[K]>;
+  };
+}[keyof InboundOf<Slot> & string];
 
 /** Values to start with per declared secret; keyed secrets take `{ [key]: value }`. */
 export type HarnessSecrets<Own extends ContractShape> = {
@@ -125,18 +134,23 @@ export interface TestHarness<
     key: string,
     value: SecretValue<Own, N>,
   ): Promise<void>;
-  /** Registers a fake provider for an own slot; the disposer removes it. */
+  /** Registers a fake provider for an own slot; push through it, `dispose()` removes it. */
   addProvider<N extends keyof OwnedSlots<Own> & string>(
     slot: N,
     key: string,
-    impl: ProviderImpl<OwnSlot<Own, N>>,
-  ): Disposer;
+    options: ProvideOptions<OwnSlot<Own, N>>,
+  ): Provided<OwnSlot<Own, N>>;
   /** The handle the slot owner sees for the plugin's provider `key` in a dependency's slot. */
   provider<N extends keyof ImplementableSlots<Deps, Opt> & string>(
     slot: N,
     key: string,
   ): ProviderHandle<DependencySlot<Deps, Opt, N>> | undefined;
-  /** Resolves when all queued events have been handled. */
+  /** What the plugin pushed as provider `key` into a dependency's slot, in order (after `idle()`). */
+  pushed<N extends keyof ImplementableSlots<Deps, Opt> & string>(
+    slot: N,
+    key: string,
+  ): readonly Pushed<DependencySlot<Deps, Opt, N>>[];
+  /** Resolves when all queued events and pushes have been handled. */
   idle(): Promise<void>;
   /** Stops the caller, the plugin and the fakes. */
   stop(): Promise<void>;
@@ -149,7 +163,7 @@ interface FakeContext {
 
 interface CallerContext {
   call(name: string, input: unknown): Promise<unknown>;
-  provide(slot: string, key: string, impl: object): Disposer;
+  provide(slot: string, key: string, options: object): Provided<ProviderSlotDef>;
 }
 
 const silentLogger: Logger = {
@@ -194,6 +208,12 @@ export async function createTestHarness<
     Record<string, { readonly rpc?: Readonly<Record<string, unknown>> } | undefined>
   >;
   const fakeContexts = new Map<string, FakeContext>();
+  /** Pushes into the fakes' slots, by `<slot> <key>`. */
+  const pushes = new Map<string, { readonly name: string; readonly payload: unknown }[]>();
+  const record = (slot: string, key: string, name: string, payload: unknown) => {
+    const id = `${slot} ${key}`;
+    pushes.set(id, [...(pushes.get(id) ?? []), { name, payload }]);
+  };
   const started: string[] = [];
   const optional = (definition.optionalDependencies ?? []).filter(
     (contract) => fakes[contract.id] !== undefined,
@@ -202,6 +222,15 @@ export async function createTestHarness<
     await kernel.start(
       fakeDefinition(contract, fakes[contract.id]?.rpc ?? {}, (ctx) => {
         fakeContexts.set(contract.id, ctx);
+        // Record what providers push into the fake's slots.
+        for (const [member, slot] of Object.entries(contract.providers ?? {})) {
+          const name = `${contract.id}.${member}`;
+          for (const inbound of Object.keys(slot.inbound ?? {})) {
+            ctx.providers(name).on(inbound, (payload, provider) => {
+              record(name, provider.key, inbound, payload);
+            });
+          }
+        }
       }),
     );
     started.push(contract.id);
@@ -280,7 +309,8 @@ export async function createTestHarness<
       else if (def.userSettable === true) await secrets.setUserValue(name, String(args[0]));
       else await secrets.set(name, undefined, args[0]);
     },
-    addProvider: (slot, key, impl) => callerContext().provide(slot, key, impl),
+    addProvider: (slot, key, provideOptions) => callerContext().provide(slot, key, provideOptions),
+    pushed: (slot, key) => (pushes.get(`${slot} ${key}`) ?? []) as never,
     provider: (slot, key) => ownerContext(slot).providers(slot).get(key),
     idle: () => kernel.idle(),
     async stop() {

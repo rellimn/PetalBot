@@ -1,20 +1,22 @@
 /**
  * The chat domain's server side: connections, the outbound path and the message buffer.
  *
- * Outbound: resolve the target -> check the capability -> `chat.beforeSend` -> the connection's
- * provider, which applies its own rate limiter. Every outcome is a `Result`; only bugs throw.
- * Inbound: the providing platform plugin calls `chat.ingest`, chat emits `chat.message`.
+ * A connection is a live `chat.platform` provider: its key is the connection id, its info the
+ * rest. Outbound: resolve the target -> check the capability -> `chat.beforeSend` -> the
+ * connection's provider, which applies its own rate limiter. Every outcome is a `Result`; only
+ * bugs throw. Inbound: the provider pushes `message`/`messageDeleted`, chat emits the events.
  *
  * Guide: docs/plugin-guide.md#12-platforms-and-providers.
  */
 import type { z } from 'zod';
 import {
-  AccessError,
   UnsupportedCapabilityError,
-  ValidationError,
   definePlugin,
   fail,
+  sourceOf,
+  type Actor,
   type ProviderHandle,
+  type Target,
 } from '@petalbot/sdk';
 import {
   Capability,
@@ -28,15 +30,13 @@ import {
   type BroadcastItemResult,
   type ConnectionInfo,
   type RecentMessage,
-  type Source,
-  type Target,
 } from './contract.ts';
 import { RECENT_LIMIT } from './limits.ts';
 
 type Registration = Omit<ConnectionInfo, 'capabilities'>;
 type Platform = ProviderHandle<typeof chatContract.providers.platform>;
 
-/** A registered connection whose provider is still there. */
+/** A connection: a live provider and what it registered. */
 interface Live {
   readonly info: Registration;
   readonly provider: Platform;
@@ -48,24 +48,44 @@ const errorText = (error: unknown): string =>
 export default definePlugin(chatContract, {
   setup(ctx) {
     const providers = ctx.providers('chat.platform');
-    /** Registered connections by id, with the plugin that provides each. */
-    const registered = new Map<string, { readonly info: Registration; readonly by: string }>();
     let recent: RecentMessage[] = [];
 
-    // A provider that goes away (disposed, or its plugin stopped) takes its connection along.
-    providers.onChange(({ key, pluginId, change }) => {
-      if (change === 'removed' && registered.get(key)?.by === pluginId) {
-        registered.delete(key);
-        ctx.emit('chat.connectionsChanged', {});
-      }
+    // Providers come, change their info and go (also when their plugin stops).
+    providers.onChange(() => {
+      ctx.emit('chat.connectionsChanged', {});
     });
 
+    const toLive = (provider: Platform): Live => ({
+      info: { id: provider.key, platform: sourceOf(provider.key).platform, ...provider.info },
+      provider,
+    });
     const liveOne = (id: string): Live | undefined => {
-      const entry = registered.get(id);
       const provider = providers.get(id);
-      return entry && provider?.pluginId === entry.by ? { info: entry.info, provider } : undefined;
+      return provider ? toLive(provider) : undefined;
     };
-    const live = (): Live[] => [...registered.keys()].flatMap((id) => liveOne(id) ?? []);
+    const live = (): Live[] => providers.list().map(toLive);
+
+    providers.on('message', (message, provider) => {
+      const source = sourceOf(provider.key);
+      // Platforms may deliver a message twice (Twitch EventSub is at-least-once).
+      const known = recent.some(
+        (entry) => entry.id === message.id && entry.source.connection === source.connection,
+      );
+      if (known) return;
+      const full = { ...message, source };
+      recent = [...recent, { ...full, deleted: false }].slice(-RECENT_LIMIT);
+      ctx.emit('chat.message', full);
+    });
+
+    providers.on('messageDeleted', ({ messageId }, provider) => {
+      const source = sourceOf(provider.key);
+      recent = recent.map((message) =>
+        message.id === messageId && message.source.connection === source.connection
+          ? { ...message, deleted: true }
+          : message,
+      );
+      ctx.emit('chat.messageDeleted', { source, messageId });
+    });
 
     const resolveConnection = (id: string): Live | z.input<typeof connectionNotFound.schema> =>
       liveOne(id) ??
@@ -89,16 +109,6 @@ export default definePlugin(chatContract, {
         { platform: target.platform, connections: candidates.map(({ info }) => info.id) },
         `Several ${target.platform} chats are connected and none is the default`,
       );
-    };
-
-    /** Only the plugin that provides a connection may speak for it. */
-    const assertOwner = (source: Source, caller: string): void => {
-      const entry = registered.get(source.connection);
-      if (entry?.by !== caller || entry.info.platform !== source.platform) {
-        throw new AccessError(
-          `Plugin "${caller}" has not registered the chat connection "${source.connection}"`,
-        );
-      }
     };
 
     const unsupported = (connection: Live, capability: Capability, what: string) =>
@@ -139,7 +149,7 @@ export default definePlugin(chatContract, {
     const beforeSend = async (
       connection: Live,
       text: string,
-      caller: string,
+      actor: Actor,
       replyTo?: string,
     ): Promise<
       { readonly ok: true; readonly text: string } | z.input<typeof sendVetoed.schema>
@@ -147,7 +157,7 @@ export default definePlugin(chatContract, {
       const result = await ctx.runHook('chat.beforeSend', {
         connection: connection.info.id,
         text,
-        caller,
+        actor,
         ...(replyTo === undefined ? {} : { replyTo }),
       });
       return result.vetoed
@@ -159,10 +169,10 @@ export default definePlugin(chatContract, {
         : { ok: true, text: result.value.text };
     };
 
-    const send = async (connection: Live, text: string, caller: string) => {
+    const send = async (connection: Live, text: string, actor: Actor) => {
       // Before the hook: taps never see a message that can't be sent anyway.
       if (!connection.provider.has('send')) return unsupported(connection, 'send', 'send messages');
-      const checked = await beforeSend(connection, text, caller);
+      const checked = await beforeSend(connection, text, actor);
       if (!checked.ok) return checked;
       return attempt(connection, 'send', () =>
         connection.provider.call('send', { text: checked.text }),
@@ -171,16 +181,16 @@ export default definePlugin(chatContract, {
 
     return {
       rpc: {
-        send: async ({ target, text }, { caller }) => {
+        send: async ({ target, text }, { actor }) => {
           const connection = resolve(target);
-          return 'provider' in connection ? send(connection, text, caller) : connection;
+          return 'provider' in connection ? send(connection, text, actor) : connection;
         },
 
-        reply: async ({ to, text }, { caller }) => {
+        reply: async ({ to, text }, { actor }) => {
           const connection = resolveConnection(to.source.connection);
           if (!('provider' in connection)) return connection;
           if (!connection.provider.has('reply')) return unsupported(connection, 'reply', 'reply');
-          const checked = await beforeSend(connection, text, caller, to.id);
+          const checked = await beforeSend(connection, text, actor, to.id);
           if (!checked.ok) return checked;
           return attempt(connection, 'reply', () =>
             connection.provider.call('reply', {
@@ -190,7 +200,7 @@ export default definePlugin(chatContract, {
           );
         },
 
-        broadcast: async ({ text, platforms, connections }, { caller }) => {
+        broadcast: async ({ text, platforms, connections }, { actor }) => {
           const chosen = live().filter(
             ({ info }) =>
               (platforms === undefined || platforms.includes(info.platform)) &&
@@ -207,7 +217,7 @@ export default definePlugin(chatContract, {
           const results = await Promise.all(
             chosen.map(async (connection): Promise<[string, BroadcastItemResult]> => [
               connection.info.id,
-              await send(connection, text, caller),
+              await send(connection, text, actor),
             ]),
           );
           return Object.fromEntries([...results, ...missing]);
@@ -244,51 +254,6 @@ export default definePlugin(chatContract, {
           })),
 
         recent: () => recent,
-
-        registerConnection: (info, { caller }) => {
-          if (!info.id.startsWith(`${info.platform}:`)) {
-            throw new ValidationError('chat connection', [
-              {
-                code: 'custom',
-                path: ['id'],
-                message: `A ${info.platform} connection id starts with "${info.platform}:"`,
-                input: info.id,
-              },
-            ]);
-          }
-          if (providers.get(info.id)?.pluginId !== caller) {
-            throw new AccessError(
-              `Plugin "${caller}" does not provide "chat.platform" for "${info.id}" (call ctx.provide first)`,
-            );
-          }
-          registered.set(info.id, { info, by: caller });
-          ctx.emit('chat.connectionsChanged', {});
-          return {};
-        },
-
-        ingest: (message, { caller }) => {
-          assertOwner(message.source, caller);
-          // Platforms may deliver a message twice (Twitch EventSub is at-least-once).
-          const known = recent.some(
-            (entry) =>
-              entry.id === message.id && entry.source.connection === message.source.connection,
-          );
-          if (known) return {};
-          recent = [...recent, { ...message, deleted: false }].slice(-RECENT_LIMIT);
-          ctx.emit('chat.message', message);
-          return {};
-        },
-
-        ingestDeleted: ({ source, messageId }, { caller }) => {
-          assertOwner(source, caller);
-          recent = recent.map((message) =>
-            message.id === messageId && message.source.connection === source.connection
-              ? { ...message, deleted: true }
-              : message,
-          );
-          ctx.emit('chat.messageDeleted', { source, messageId });
-          return {};
-        },
       },
     };
   },

@@ -1,7 +1,7 @@
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { describe, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
-import type { ProviderChange, ProviderHandle } from '../src/context.ts';
+import type { ProviderChange, ProviderHandle, Provided } from '../src/context.ts';
 import type { EventEnvelope } from '../src/envelope.ts';
 import { defineContract } from '../src/contract.ts';
 import { definePlugin } from '../src/plugin.ts';
@@ -129,64 +129,97 @@ describe('hooks', () => {
 });
 
 describe('providers', () => {
-  it('lets dependents implement a subset of a slot', () => {
+  const failure = {
+    ok: false,
+    reason: 'forbidden',
+    error: { code: 'send-denied' },
+    message: 'x',
+  } as const;
+
+  it('lets dependents implement a subset of a slot, with info when the slot has it', () => {
     definePlugin(bareContract, {
       dependencies: [chatContract],
       setup(ctx) {
-        ctx.provide('chat.platform', 'twitch:roman', {
-          send: ({ text }) => Promise.resolve({ messageId: text }),
+        const provided = ctx.provide('chat.platform', 'twitch:roman', {
+          info: { channel: 'roman' },
+          methods: { send: ({ text }) => Promise.resolve({ messageId: text }) },
         });
+        expectTypeOf(provided).toEqualTypeOf<
+          Provided<(typeof chatContract)['providers']['platform']>
+        >();
+        // @ts-expect-error -- the slot declares info
+        ctx.provide('chat.platform', 'twitch:roman', { methods: {} });
         ctx.provide('chat.platform', 'twitch:roman', {
+          info: { channel: 'roman' },
           // @ts-expect-error -- unknown method
-          shout: () => Promise.resolve({}),
+          methods: { shout: () => Promise.resolve({}) },
         });
+        ctx.provide('chat.bare', 'x', { methods: { ping: () => Promise.resolve({}) } });
+        // @ts-expect-error -- a slot without info takes none
+        ctx.provide('chat.bare', 'x', { info: { channel: 'x' } });
       },
     });
   });
 
-  it('gives the owner typed handles', () => {
+  it('types push and update from the slot', () => {
+    definePlugin(bareContract, {
+      dependencies: [chatContract],
+      setup(ctx) {
+        const provided = ctx.provide('chat.platform', 'twitch:roman', {
+          info: { channel: 'roman' },
+        });
+        provided.push('message', { text: 'hi' });
+        // @ts-expect-error -- unknown inbound name
+        provided.push('nope', {});
+        // @ts-expect-error -- wrong payload
+        provided.push('message', { text: 1 });
+        provided.update({ channel: 'other', isDefault: true });
+        const bare = ctx.provide('chat.bare', 'x', {});
+        // @ts-expect-error -- no info to update
+        bare.update({});
+        // @ts-expect-error -- no inbound to push
+        bare.push('message', {});
+      },
+    });
+  });
+
+  it('gives the owner typed handles, info and inbound payloads', () => {
     definePlugin(chatContract, {
       async setup(ctx) {
-        const handle = ctx.providers('chat.platform').get('twitch:roman');
+        const view = ctx.providers('chat.platform');
+        const handle = view.get('twitch:roman');
         expectTypeOf(handle).toEqualTypeOf<
           ProviderHandle<(typeof chatContract)['providers']['platform']> | undefined
         >();
+        expectTypeOf(view.list()[0]?.methods).toEqualTypeOf<
+          readonly ('send' | 'timeout')[] | undefined
+        >();
         if (handle) {
+          expectTypeOf(handle.info).toEqualTypeOf<{ channel: string; isDefault: boolean }>();
           const out = await handle.call('send', { text: 'hi' });
           expectTypeOf(out).toEqualTypeOf<{ messageId: string }>();
         }
-        return {
-          rpc: {
-            send: () => ({
-              ok: false,
-              reason: 'forbidden',
-              error: { code: 'send-denied' },
-              message: 'x',
-            }),
-          },
-        };
+        expectTypeOf(ctx.providers('chat.bare').get('x')?.info).toEqualTypeOf<undefined>();
+        view.on('message', (payload, provider) => {
+          expectTypeOf(payload).toEqualTypeOf<{ text: string }>();
+          expectTypeOf(provider.key).toEqualTypeOf<string>();
+        });
+        // @ts-expect-error -- unknown inbound name
+        view.on('nope', () => undefined);
+        return { rpc: { send: () => failure } };
       },
     });
   });
 
-  it('tells the owner which provider came or went', () => {
+  it('tells the owner which provider came, changed or went', () => {
     definePlugin(chatContract, {
       setup(ctx) {
         const stop = ctx.providers('chat.platform').onChange((change) => {
           expectTypeOf(change).toEqualTypeOf<ProviderChange>();
-          expectTypeOf(change.change).toEqualTypeOf<'added' | 'removed'>();
+          expectTypeOf(change.change).toEqualTypeOf<'added' | 'updated' | 'removed'>();
         });
         expectTypeOf(stop).toEqualTypeOf<Disposer>();
-        return {
-          rpc: {
-            send: () => ({
-              ok: false,
-              reason: 'forbidden',
-              error: { code: 'send-denied' },
-              message: 'x',
-            }),
-          },
-        };
+        return { rpc: { send: () => failure } };
       },
     });
   });

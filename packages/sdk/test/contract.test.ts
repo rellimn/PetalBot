@@ -275,7 +275,9 @@ describe('defineContract failure codes', () => {
         remove: { output: Result(z.object({}), [missing]) },
       },
       providers: {
-        store: { load: { input: z.object({}), output: Result(z.object({}), [missing]) } },
+        store: {
+          methods: { load: { input: z.object({}), output: Result(z.object({}), [missing]) } },
+        },
       },
     };
     expect(() => {
@@ -312,11 +314,22 @@ describe('defineContract failure codes', () => {
       version: '1.0.0',
       rpc: { get: { output: Result(z.object({}), [missing]) } },
       providers: {
-        store: { load: { input: z.object({}), output: Result(z.object({}), [alsoMissing]) } },
+        store: {
+          methods: { load: { input: z.object({}), output: Result(z.object({}), [alsoMissing]) } },
+        },
       },
     };
     expect(() => {
       checkContract(provider);
+    }).toThrow(message);
+    const inbound: ContractShape = {
+      id: 'quotes',
+      version: '1.0.0',
+      rpc: { get: { output: Result(z.object({}), [missing]) } },
+      providers: { store: { inbound: { lost: Result(z.object({}), [alsoMissing]) } } },
+    };
+    expect(() => {
+      checkContract(inbound);
     }).toThrow(message);
   });
 });
@@ -347,7 +360,9 @@ describe('defineContract timeouts', () => {
     const provider = (timeoutMs: number): ContractShape => ({
       id: 'a',
       version: '1.0.0',
-      providers: { p: { m: { input: z.object({}), output: z.object({}), timeoutMs } } },
+      providers: {
+        p: { methods: { m: { input: z.object({}), output: z.object({}), timeoutMs } } },
+      },
     });
     expect(() => {
       checkContract(provider(0));
@@ -401,5 +416,37 @@ describe('defineContract flow marks', () => {
     expect(() => {
       checkContract(rpc({ output: z.object({}), flow: { label: 'Give', retryable: true } }));
     }).not.toThrow();
+  });
+});
+
+describe('defineContract provider slots', () => {
+  const slot = (def: unknown) =>
+    ({ id: 'chat', version: '1.0.0', providers: { platform: def } }) as ContractShape;
+
+  it('accepts key, info, methods and inbound only', () => {
+    expect(() => {
+      checkContract(
+        slot({
+          key: z.string(),
+          info: z.object({}),
+          methods: { send: { input: z.object({}), output: z.object({}) } },
+          inbound: { message: z.object({}) },
+        }),
+      );
+    }).not.toThrow();
+    expect(() => {
+      checkContract(slot({ send: { input: z.object({}), output: z.object({}) } }));
+    }).toThrow('Provider slot "platform" of contract "chat": move methods under "methods"');
+  });
+
+  it('checks member names of methods and inbound', () => {
+    expect(() => {
+      checkContract(
+        slot({ methods: { 'bad-name': { input: z.object({}), output: z.object({}) } } }),
+      );
+    }).toThrow(/bad-name/);
+    expect(() => {
+      checkContract(slot({ inbound: { 'bad-name': z.object({}) } }));
+    }).toThrow(/bad-name/);
   });
 });
