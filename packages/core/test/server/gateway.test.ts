@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { describe, expect, it, vi } from 'vitest';
 import { defineContract, definePlugin, type Logger } from '@petalbot/sdk';
 import { Kernel } from '../../src/kernel.ts';
-import type { OverlayBundleInfo, PluginInfo } from '../../src/plugin-manager.ts';
+import type { OverlayBundleInfo, PluginInfo } from '../../src/index.ts';
 import {
   ClientGateway,
   type ClientTransport,

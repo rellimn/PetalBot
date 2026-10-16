@@ -2,8 +2,8 @@ import type { UseMutationResult } from '@tanstack/react-query';
 import { describe, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
 import { Choices, Result, defineContract, defineFailure } from '@petalbot/sdk';
-import type { ClientError } from '../src/client/errors.ts';
-import { createPluginClient } from '../src/client/plugin-client.ts';
+import type { ClientError } from '../src';
+import { createPluginClient } from '../src';
 
 const counterNotFound = defineFailure({
   code: 'counter-not-found',

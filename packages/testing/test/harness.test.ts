@@ -3,7 +3,7 @@ import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 import { Result, defineFailure, defineContract, definePlugin, fail, ok } from '@petalbot/sdk';
-import { createTestHarness } from '../src/harness.ts';
+import { createTestHarness } from '../src';
 
 const pointsContract = defineContract({
   id: 'points',

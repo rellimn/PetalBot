@@ -2,8 +2,8 @@ import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { DiscoveredPlugin } from '../src/loader/discovery.ts';
-import { BundleTooLargeError, readPluginBundles } from '../src/loader/bundles.ts';
+import type { DiscoveredPlugin } from '../src/index.ts';
+import { BundleTooLargeError, readPluginBundles } from '../src/index.ts';
 
 async function pluginWith(
   files: Record<string, string>,

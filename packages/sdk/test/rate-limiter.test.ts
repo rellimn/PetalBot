@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import { Result } from '../src/result.ts';
-import { rateLimitedFailure } from '../src/rate-limiter.ts';
+import { rateLimitedFailure } from '../src/index.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createRateLimiter, type RateLimiterOptions } from '../src/rate-limiter.ts';
+import { createRateLimiter, type RateLimiterOptions } from '../src/index.ts';
 
 const options = (overrides: Partial<RateLimiterOptions> = {}): RateLimiterOptions => ({
   limit: 2,

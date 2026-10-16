@@ -3,9 +3,9 @@ import { userEvent } from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { Result, defineContract, defineFailure } from '@petalbot/sdk';
-import { ClientError } from '../src/client/errors.ts';
-import { createPluginClient, type MutationOptions } from '../src/client/plugin-client.ts';
-import { Toaster } from '../src/components/Toaster.tsx';
+import { ClientError } from '../src';
+import { createPluginClient, type MutationOptions } from '../src';
+import { Toaster } from '../src';
 import type { FakeSocket } from './fake-socket.ts';
 import { renderWithPetal } from './render.tsx';
 

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { discoverPlugins } from '../src/loader/discovery.ts';
+import { discoverPlugins } from '../src/index.ts';
 import { writeBuild } from './helpers.ts';
 
 async function root(): Promise<string> {

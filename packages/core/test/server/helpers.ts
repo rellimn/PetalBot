@@ -3,9 +3,9 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { AnyPluginDefinition, PanelUser } from '@petalbot/sdk';
-import { resolveConfig, type ResolvedConfig } from '../../src/server/config.ts';
+import { resolveConfig, type ResolvedConfig } from '../../src/index.ts';
 import { SESSION_COOKIE } from '../../src/server/http/cookies.ts';
-import { createServices, type Services } from '../../src/server/services.ts';
+import { createServices, type Services } from '../../src/index.ts';
 import { createMemoryLogger, writeBuild } from '../helpers.ts';
 import { ownerUser } from './fixtures.ts';
 

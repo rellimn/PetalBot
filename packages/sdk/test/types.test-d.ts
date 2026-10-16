@@ -5,7 +5,7 @@ import type { ProviderChange, ProviderHandle } from '../src/context.ts';
 import type { EventEnvelope } from '../src/envelope.ts';
 import { defineContract } from '../src/contract.ts';
 import { definePlugin } from '../src/plugin.ts';
-import type { Disposer } from '../src/type-utils.ts';
+import type { Disposer } from '../src/index.ts';
 import { bareContract, chatContract, pointsContract, quotesContract } from './fixtures.ts';
 
 describe('ctx.on', () => {

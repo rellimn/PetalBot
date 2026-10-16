@@ -9,7 +9,7 @@ import {
   type EventEnvelope,
 } from '@petalbot/sdk';
 import { Kernel } from '../src/kernel.ts';
-import { currentPlugin } from '../src/plugin-scope.ts';
+import { currentPlugin } from '../src/index.ts';
 import { counterContract, createMemoryLogger, delay, listenerContract } from './helpers.ts';
 
 /** The listener's ctx type, as captured by a test that keeps it past stop(). */

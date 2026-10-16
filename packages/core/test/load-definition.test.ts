@@ -2,8 +2,8 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { DiscoveredPlugin } from '../src/loader/discovery.ts';
-import { loadDefinition } from '../src/loader/load-definition.ts';
+import type { DiscoveredPlugin } from '../src/index.ts';
+import { loadDefinition } from '../src/index.ts';
 
 async function pluginWith(
   source: string,

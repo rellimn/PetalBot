@@ -2,8 +2,8 @@ pnpm-lock.yaml
 dist
 coverage
 .idea
-docs/superpowers
 .superpowers
-docs/api/*.json
 plugins/*/drizzle
 packages/create-plugin/.out
+docs
+packages/create-plugin/src/template.ts

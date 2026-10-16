@@ -4,8 +4,8 @@ import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { codecs, defineContract, defineFailure, Result } from '@petalbot/sdk';
-import { ClientError } from '../src/client/errors.ts';
-import { createPluginClient } from '../src/client/plugin-client.ts';
+import { ClientError } from '../src';
+import { createPluginClient } from '../src';
 import { renderWithPetal } from './render.tsx';
 
 const late = defineFailure({

@@ -5,11 +5,11 @@ import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 import { defineContract, definePlugin, type AnyPluginDefinition } from '@petalbot/sdk';
 import { Kernel } from '../src/kernel.ts';
-import { currentPlugin, runInPlugin } from '../src/plugin-scope.ts';
-import { DependencyActionRequired, PluginManager } from '../src/plugin-manager.ts';
-import { openDatabase, type Sqlite } from '../src/storage/database.ts';
+import { currentPlugin, runInPlugin } from '../src/index.ts';
+import { DependencyActionRequired, PluginManager } from '../src/index.ts';
+import { openDatabase, type Sqlite } from '../src/index.ts';
 import { PluginStateStore } from '../src/storage/plugin-state-store.ts';
-import { createStorage } from '../src/storage/storage.ts';
+import { createStorage } from '../src/index.ts';
 import { randomBytes } from 'node:crypto';
 import { counterContract, createMemoryLogger, listenerContract, writeBuild } from './helpers.ts';
 
@@ -209,7 +209,6 @@ describe('PluginManager', () => {
     definitions.counter = definePlugin(counterContract, {
       setup() {
         throw new Error('reload boom');
-        return { rpc: { double: ({ n }) => n * 2 } };
       },
     });
     await expect(manager.reload('counter')).rejects.toThrow('reload boom');
