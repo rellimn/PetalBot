@@ -1,0 +1,43 @@
+{
+  "name": "@petalbot-plugin/twitch",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./contract": "./src/contract.ts"
+  },
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "petalbot": {
+    "id": "twitch",
+    "apiVersion": 3,
+    "dependencies": {
+      "chat": "^3.0.0",
+      "stream": "^2.0.0"
+    }
+  },
+  "dependencies": {
+    "@petalbot/sdk": "workspace:*",
+    "@petalbot/ui-sdk": "workspace:*",
+    "@twurple/api": "8.2.0",
+    "@twurple/auth": "8.2.0",
+    "@twurple/eventsub-ws": "8.2.0",
+    "lucide-react": "^1.55.0",
+    "react": "^19.3.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@petalbot-plugin/chat": "workspace:*",
+    "@petalbot-plugin/stream": "workspace:*",
+    "@petalbot/testing": "workspace:*",
+    "@petalbot/tooling": "workspace:*",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
+    "@types/react": "^19.3.0",
+    "happy-dom": "^20.14.6",
+    "vite": "^8.3.4"
+  }
+}
