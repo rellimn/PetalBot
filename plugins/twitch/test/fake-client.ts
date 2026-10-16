@@ -50,6 +50,7 @@ export interface FakeDefaults {
   stream?: FakeClient['stream'];
   role?: FakeClient['role'];
   send?: FakeClient['send'];
+  revoke?: FakeClient['revokeImpl'];
 }
 
 export function createFakeClient(defaults: FakeDefaults = {}) {
@@ -76,7 +77,7 @@ export function createFakeClient(defaults: FakeDefaults = {}) {
       send: defaults.send ?? (() => Promise.resolve({ sent: true, messageId: 'm1' })),
       delete: () => Promise.resolve(),
       timeout: () => Promise.resolve(),
-      revokeImpl: () => Promise.resolve(),
+      revokeImpl: defaults.revoke ?? (() => Promise.resolve()),
       exchangeCode(code, redirectUri) {
         record('exchangeCode', { code, redirectUri });
         return client.exchange(code);
