@@ -9,6 +9,7 @@ import {
   type EventEnvelope,
   type Logger,
   type MaybePromise,
+  type Actor,
   type RpcClient,
   type RpcDef,
 } from '@petalbot/sdk';
@@ -359,7 +360,11 @@ export class Kernel {
 
   /** Calls an RPC for a browser client. Exposure checks are the gateway's job. */
   callFromClient(name: string, input: unknown, client: RpcClient): Promise<unknown> {
-    return this.#rpc.call('client', name, input, { client });
+    const actor: Actor =
+      client.kind === 'panel'
+        ? { kind: 'user', user: client.user }
+        : { kind: 'overlay', instanceId: client.instanceId };
+    return this.#rpc.call('client', name, input, { client, actor });
   }
 
   /** Stored settings of `definition`, parsed with its schema (works for stopped plugins). */

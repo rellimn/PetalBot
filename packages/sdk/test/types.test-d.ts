@@ -5,7 +5,7 @@ import type { ProviderChange, ProviderHandle } from '../src/context.ts';
 import type { EventEnvelope } from '../src/envelope.ts';
 import { defineContract } from '../src/contract.ts';
 import { definePlugin } from '../src/plugin.ts';
-import type { Disposer } from '../src/index.ts';
+import type { Actor, Disposer, Via } from '../src/index.ts';
 import { bareContract, chatContract, pointsContract, quotesContract } from './fixtures.ts';
 
 describe('ctx.on', () => {
@@ -233,6 +233,8 @@ describe('definePlugin rpc implementations', () => {
             expectTypeOf(input).toEqualTypeOf<{ text: string }>();
             expectTypeOf(meta.caller).toEqualTypeOf<string>();
             expectTypeOf(meta.who).toEqualTypeOf<string>();
+            expectTypeOf(meta.actor).toEqualTypeOf<Actor>();
+            expectTypeOf(meta.via).toEqualTypeOf<Via | undefined>();
             return { ok: true, messageId: input.text };
           },
         },

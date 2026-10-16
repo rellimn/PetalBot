@@ -3,10 +3,14 @@ import {
   AccessError,
   PluginUnavailableError,
   RpcTimeoutError,
+  describeActor,
+  type Actor,
   type MaybePromise,
   type RpcClient,
   type RpcMeta,
+  type Via,
 } from '@petalbot/sdk';
+import { currentActor, runAsActor } from './actor-scope.ts';
 import type { ContractRegistry } from './contract-registry.ts';
 import { once } from './disposer-scope.ts';
 import { ownerOf } from './names.ts';
@@ -27,6 +31,10 @@ export interface RpcCallOptions {
   readonly timeoutMs?: number;
   /** Set for calls from a browser. */
   readonly client?: RpcClient;
+  /** Who caused the call. Default: the running code's actor, else the calling plugin. */
+  readonly actor?: Actor;
+  /** What acts on the actor's behalf. Default: the running code's. */
+  readonly via?: Via;
 }
 
 /** Validates the input of RPCs that declare none: it must be absent. */
@@ -68,13 +76,19 @@ export class RpcRouter {
     const parsedInput = parseOrThrow(rpc.def.input ?? NO_INPUT, input, `input of "${name}"`);
     const timeoutMs = options.timeoutMs ?? rpc.def.timeoutMs ?? this.#timeoutMs;
     const client = options.client;
-    const who =
-      client === undefined ? caller : client.kind === 'panel' ? client.user.name : 'overlay';
+    const running = currentActor();
+    const actor: Actor = options.actor ?? running?.actor ?? { kind: 'plugin', pluginId: caller };
+    const via = options.via ?? running?.via;
+    const context = via === undefined ? { actor } : { actor, via };
+    const meta: RpcMeta = {
+      caller,
+      who: describeActor(actor),
+      ...context,
+      ...(client ? { client } : {}),
+    };
     const output = await withTimeout(
       Promise.resolve().then(() =>
-        runInPlugin(owner, () =>
-          handler(parsedInput as never, { caller, who, ...(client ? { client } : {}) }),
-        ),
+        runInPlugin(owner, () => runAsActor(context, () => handler(parsedInput as never, meta))),
       ),
       timeoutMs,
       () => new RpcTimeoutError(name, timeoutMs),

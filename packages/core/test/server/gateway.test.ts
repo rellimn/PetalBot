@@ -245,7 +245,12 @@ describe('ClientGateway', () => {
       expect(mod.transport.reply('3')).toEqual({
         type: 'reply',
         id: '3',
-        result: { caller: 'client', who: 'mia', client: { kind: 'panel', user: modUser } },
+        result: {
+          caller: 'client',
+          who: 'mia',
+          actor: { kind: 'user', user: modUser },
+          client: { kind: 'panel', user: modUser },
+        },
       });
       expect(owner.transport.reply('4')).toEqual({
         type: 'reply',
@@ -322,7 +327,11 @@ describe('ClientGateway', () => {
       expect(transport.reply('3')).toMatchObject({ result: ['a'] });
       expect(transport.reply('4')).toMatchObject({ error: { code: 'forbidden' } });
       expect(transport.reply('5')).toMatchObject({
-        result: { who: 'overlay', client: { kind: 'overlay', instanceId: 'i1' } },
+        result: {
+          who: 'overlay',
+          actor: { kind: 'overlay', instanceId: 'i1' },
+          client: { kind: 'overlay', instanceId: 'i1' },
+        },
       });
     });
     expect(transport.ofType('event')).toHaveLength(1);

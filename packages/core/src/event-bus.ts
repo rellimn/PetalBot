@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { monotonicFactory } from 'ulid';
 import { AccessError, type EventEnvelope, type Logger, type MaybePromise } from '@petalbot/sdk';
+import { currentActor, outsideActor, runAsActor } from './actor-scope.ts';
 import type { ContractRegistry } from './contract-registry.ts';
 import { once } from './disposer-scope.ts';
 import { errorMessage } from './names.ts';
@@ -27,6 +28,15 @@ export interface EventBusOptions {
   readonly maxDepth?: number;
   /** Called after a handler failed (already logged). */
   readonly onHandlerError?: (pluginId: string, error: unknown) => void;
+}
+
+/** Runs `fn` as the envelope's actor, or with no actor when the event had none. */
+function withActorOf<T>(envelope: EventEnvelope, fn: () => T): T {
+  if (envelope.actor === undefined) return outsideActor(fn);
+  const context = envelope.via
+    ? { actor: envelope.actor, via: envelope.via }
+    : { actor: envelope.actor };
+  return runAsActor(context, fn);
 }
 
 export class EventBus {
@@ -91,6 +101,7 @@ export class EventBus {
       });
       return;
     }
+    const acting = currentActor();
     const envelope: EventEnvelope = {
       id: this.#ulid(),
       name,
@@ -99,6 +110,8 @@ export class EventBus {
       timestamp: Date.now(),
       depth,
       ...(parent ? { causedBy: parent.id } : {}),
+      ...(acting ? { actor: acting.actor } : {}),
+      ...(acting?.via ? { via: acting.via } : {}),
     };
     for (const tap of this.#taps) {
       try {
@@ -138,7 +151,9 @@ export class EventBus {
       if (!envelope) break;
       try {
         await runInPlugin(subscription.pluginId, () =>
-          this.#causation.run(envelope, () => subscription.handler(envelope)),
+          this.#causation.run(envelope, () =>
+            withActorOf(envelope, () => subscription.handler(envelope)),
+          ),
         );
       } catch (error) {
         this.#logger.error('Event handler failed', {

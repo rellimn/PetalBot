@@ -30,7 +30,12 @@ export const alertsContract = defineContract({
     },
     whoami: {
       input: z.object({}),
-      output: z.object({ caller: z.string(), who: z.string(), client: z.unknown() }),
+      output: z.object({
+        caller: z.string(),
+        who: z.string(),
+        actor: z.unknown(),
+        client: z.unknown(),
+      }),
       expose: { panel: 'mod', overlay: true },
     },
     slow: { input: z.object({}), output: z.object({}), expose: { panel: 'mod' } },
@@ -100,7 +105,7 @@ export function alertsPlugin(options: AlertsOptions = {}) {
         rpc: {
           recent: ({ limit }) => ['a', 'b', 'c'].slice(0, limit),
           clear: () => ({ cleared: 3 }),
-          whoami: (_input, { caller, client, who }) => ({ caller, who, client }),
+          whoami: (_input, { caller, client, who, actor }) => ({ caller, who, actor, client }),
           ping: () => 'pong',
           slow: async () => {
             await (options.slow ?? Promise.resolve());

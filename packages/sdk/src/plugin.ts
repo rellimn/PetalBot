@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import type { Actor, Via } from './actor.ts';
 import type { ContractShape } from './contract.ts';
 import type { PluginContext } from './context.ts';
 import type { RpcClient } from './identity.ts';
@@ -11,8 +12,15 @@ export interface RpcMeta {
   readonly caller: string;
   /** Set for calls from a browser: who made the call. */
   readonly client?: RpcClient;
-  /** A display label: the panel user's name, `'overlay'`, or the calling plugin's id. */
+  /** A display label of the actor (`describeActor`): a name, `'overlay'` or a plugin id. */
   readonly who: string;
+  /**
+   * Who caused the call: a panel user, an overlay, a chat viewer or a flow. It travels along
+   * nested calls and events; a plugin acting on its own is the actor of its own calls.
+   */
+  readonly actor: Actor;
+  /** What acted on the actor's behalf (a flow), if anything. */
+  readonly via?: Via;
 }
 
 type ImplInput<D> = D extends { input: infer I extends z.ZodType } ? z.output<I> : undefined;

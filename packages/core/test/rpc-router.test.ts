@@ -30,7 +30,11 @@ describe('RpcRouter', () => {
       return input.n * 2;
     });
     await expect(rpc.call('quotes', 'counter.double', { n: 21 })).resolves.toBe(42);
-    expect(meta).toEqual({ caller: 'quotes', who: 'quotes' });
+    expect(meta).toEqual({
+      caller: 'quotes',
+      who: 'quotes',
+      actor: { kind: 'plugin', pluginId: 'quotes' },
+    });
   });
 
   it('rejects invalid input with ValidationError', async () => {
