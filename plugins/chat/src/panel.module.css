@@ -1,0 +1,54 @@
+.widget {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pb-space-3);
+}
+
+/* Newest first in the DOM, shown at the bottom: the list starts scrolled to the newest. */
+.messages {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: var(--pb-space-1);
+  max-height: 20rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.message {
+  padding: var(--pb-space-1) var(--pb-space-2);
+  border-radius: var(--pb-radius-sm);
+  overflow-wrap: anywhere;
+}
+
+/* --pb-accent can be a gradient, so the border uses the accent text color. */
+.message[data-from-bot] {
+  border-left: 2px solid var(--pb-accent-text);
+  background: var(--pb-surface-3);
+}
+
+.message[data-deleted] .text {
+  color: var(--pb-text-muted);
+  text-decoration: line-through;
+}
+
+.author {
+  font-weight: var(--pb-font-weight-bold);
+}
+
+.note {
+  color: var(--pb-text-muted);
+  font-size: var(--pb-font-size-sm);
+}
+
+.send {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pb-space-2);
+}
+
+.send > input {
+  flex: 1 1 10rem;
+  min-width: 0;
+}

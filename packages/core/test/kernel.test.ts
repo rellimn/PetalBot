@@ -9,6 +9,7 @@ import {
   type EventEnvelope,
 } from '@petalbot/sdk';
 import { Kernel } from '../src/kernel.ts';
+import { currentPlugin } from '../src/plugin-scope.ts';
 import { counterContract, createMemoryLogger, delay, listenerContract } from './helpers.ts';
 
 /** The listener's ctx type, as captured by a test that keeps it past stop(). */
@@ -392,5 +393,52 @@ describe('Kernel RPC registration', () => {
     await expect(kernel.callFromClient('ping.ping', undefined, panelCall)).rejects.toBeInstanceOf(
       PluginUnavailableError,
     );
+  });
+});
+
+describe('Kernel provider changes', () => {
+  function watcher(seen: string[], options: { throws?: boolean } = {}) {
+    return definePlugin(counterContract, {
+      setup(ctx) {
+        ctx.providers('counter.sink').onChange(({ key, change }) => {
+          seen.push(`${change} ${key} as ${currentPlugin() ?? 'nobody'}`);
+          if (options.throws === true) throw new Error('listener broke');
+        });
+        return { rpc: { double: ({ n }) => n * 2 } };
+      },
+    });
+  }
+
+  it('tells the slot owner when a provider comes and when its plugin stops', async () => {
+    const kernel = new Kernel({ logger: createMemoryLogger() });
+    const seen: string[] = [];
+    await kernel.start(watcher(seen));
+    await kernel.start(listenerPlugin({ heard: [] }));
+    await kernel.stop('listener');
+    expect(seen).toEqual(['added listener:main as counter', 'removed listener:main as counter']);
+  });
+
+  it('removes the listener when the slot owner stops', async () => {
+    const kernel = new Kernel({ logger: createMemoryLogger() });
+    const seen: string[] = [];
+    await kernel.start(watcher(seen));
+    await kernel.stop('counter');
+    await kernel.start(counterPlugin(() => undefined));
+    await kernel.start(listenerPlugin({ heard: [] }));
+    expect(seen).toEqual([]);
+  });
+
+  it('logs a throwing listener and keeps the registration', async () => {
+    const logger = createMemoryLogger();
+    const kernel = new Kernel({ logger });
+    const seen: string[] = [];
+    await kernel.start(watcher(seen, { throws: true }));
+    await kernel.start(listenerPlugin({ heard: [] }));
+    expect(seen).toEqual(['added listener:main as counter']);
+    expect(logger.entries).toContainEqual({
+      level: 'error',
+      message: 'Provider change listener failed',
+      data: expect.objectContaining({ slot: 'counter.sink', error: 'listener broke' }) as object,
+    });
   });
 });

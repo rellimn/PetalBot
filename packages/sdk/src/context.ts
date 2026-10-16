@@ -119,9 +119,20 @@ export interface ProviderHandle<Slot extends ProviderSlotDef> {
   ): Promise<z.output<Slot[M]['output']>>;
 }
 
+/** A provider of a slot was registered, or its registration ended. */
+export interface ProviderChange {
+  readonly key: string;
+  /** The implementing plugin. */
+  readonly pluginId: string;
+  /** `removed` also when the implementing plugin stopped. */
+  readonly change: 'added' | 'removed';
+}
+
 export interface ProviderView<Slot extends ProviderSlotDef> {
   keys(): string[];
   get(key: string): ProviderHandle<Slot> | undefined;
+  /** Calls `listener` after a provider of this slot was added or removed. Removed on stop. */
+  onChange(listener: (change: ProviderChange) => void): Disposer;
 }
 
 /**

@@ -139,7 +139,10 @@ export type MutationOptions<Input, Output, Context = unknown> = {
   readonly success?: string | ((data: Output) => ToastInput);
   /** A toast after failure, with the error's (or failed `Result`'s) message as the description. */
   readonly error?: string | ((problem: { readonly message: string }) => ToastInput);
-} & Pick<UseMutationOptions<Output, ClientError, Input, Context>, "onSuccess" | "onMutate" | "onError" | "onSettled">
+} & Pick<
+  UseMutationOptions<Output, ClientError, Input, Context>,
+  'onSuccess' | 'onMutate' | 'onError' | 'onSettled'
+>;
 
 // `void` lets RPCs without input be called as `mutate()` (TanStack's convention).
 // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- see above
@@ -367,7 +370,11 @@ function errorToast(
     : option(problem);
 }
 
-function mutationHandle<Input, Output>(schemas: WireSchemas, name: string, invalidates: readonly string[]) {
+function mutationHandle<Input, Output>(
+  schemas: WireSchemas,
+  name: string,
+  invalidates: readonly string[],
+) {
   function useMutation<Context>(
     options: MutationOptions<Input, Output, Context> = {},
   ): UseMutationResult<Output, ClientError, Input, Context> {

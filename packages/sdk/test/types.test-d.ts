@@ -1,7 +1,7 @@
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { describe, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
-import type { ProviderHandle } from '../src/context.ts';
+import type { ProviderChange, ProviderHandle } from '../src/context.ts';
 import type { EventEnvelope } from '../src/envelope.ts';
 import { defineContract } from '../src/contract.ts';
 import { definePlugin } from '../src/plugin.ts';
@@ -153,6 +153,19 @@ describe('providers', () => {
           const out = await handle.call('send', { text: 'hi' });
           expectTypeOf(out).toEqualTypeOf<{ messageId: string }>();
         }
+        return { rpc: { send: () => ({ ok: false, reason: 'unsupported', message: 'x' }) } };
+      },
+    });
+  });
+
+  it('tells the owner which provider came or went', () => {
+    definePlugin(chatContract, {
+      setup(ctx) {
+        const stop = ctx.providers('chat.platform').onChange((change) => {
+          expectTypeOf(change).toEqualTypeOf<ProviderChange>();
+          expectTypeOf(change.change).toEqualTypeOf<'added' | 'removed'>();
+        });
+        expectTypeOf(stop).toEqualTypeOf<Disposer>();
         return { rpc: { send: () => ({ ok: false, reason: 'unsupported', message: 'x' }) } };
       },
     });

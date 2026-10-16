@@ -8,6 +8,7 @@ import {
   type HttpRouteOptions,
   type Logger,
   type MaybePromise,
+  type ProviderChange,
   type ScheduleApi,
 } from '@petalbot/sdk';
 import type { DisposerScope } from './disposer-scope.ts';
@@ -15,7 +16,8 @@ import { isJsonSafe } from './json-safe.ts';
 import { KeyedLock } from './keyed-lock.ts';
 import type { EventBus, RawEventHandler } from './event-bus.ts';
 import type { HookRunner, RawHookHandler } from './hook-runner.ts';
-import { ownerOf, splitName } from './names.ts';
+import { errorMessage, ownerOf, splitName } from './names.ts';
+import { runInPlugin } from './plugin-scope.ts';
 import { isRoutePath, type PluginRouteTable } from './plugin-routes.ts';
 import type { PluginSecrets, SecretListener } from './plugin-secrets.ts';
 import type { ProviderRegistry, RawProviderImpl } from './provider-registry.ts';
@@ -319,7 +321,29 @@ export function createPluginContext(options: CreateContextOptions): RuntimeConte
       if (!definition.contract.providers?.[member]) {
         throw new AccessError(`Unknown provider slot "${slot}"`);
       }
-      return services.providers.view(slot);
+      const view = services.providers.view(slot);
+      return {
+        keys: () => view.keys(),
+        get: (key: string) => view.get(key),
+        onChange: (listener: (change: ProviderChange) => void) => {
+          assertLive();
+          return track(
+            view.onChange((change) => {
+              // Runs as this plugin, also while the implementing plugin registers or stops.
+              runInPlugin(pluginId, () => {
+                try {
+                  listener(change);
+                } catch (error) {
+                  log.error('Provider change listener failed', {
+                    slot,
+                    error: errorMessage(error),
+                  });
+                }
+              });
+            }),
+          );
+        },
+      };
     },
     isRunning(id) {
       assertLive();

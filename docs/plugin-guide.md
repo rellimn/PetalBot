@@ -6,7 +6,7 @@ events, timers, HTTP routes), panel pages and dashboard widgets, and OBS overlay
 to each other only through typed **contracts**, so every name and payload autocompletes.
 
 This guide walks through a plugin from start to finish, then lists the rules that bite, a
-"when to use what" section and a glossary. The API references hold the details:
+"when to use what" section, how platforms plug in and a glossary. The API references hold the details:
 [docs/api/plugin-api.md](api/plugin-api.md) (contracts, server, build, testing) and
 [docs/api/ui-sdk.md](api/ui-sdk.md) (client, components, tokens). The counter
 ([plugins/counter](../plugins/counter/README.md)) is the full worked example; most excerpts below
@@ -142,7 +142,7 @@ export const counterContract = defineContract({
   reads and is safe to repeat; clients call it on mount, on focus, on retry and after events.
   Without `kind` an RPC is a mutation: clients only call it when the user acts.
 - **Hooks** are an awaited pipeline other plugins tap to change or veto something; **providers**
-  are interfaces other plugins implement, keyed by a connection (both: section 11).
+  are interfaces other plugins implement, keyed by a connection (sections 11 and 12).
 - **Settings** are a zod object; the panel generates their form. Every field needs a default.
 - **Widgets** list the dashboard widgets, each with an optional per-instance `config`.
 - **Overlays** list each overlay's instance `config` and exactly the events and RPCs it may use.
@@ -549,19 +549,133 @@ repeated values and lose the cause.
 | throw `ValidationError`  | the caller sent something invalid (shown on the form field)                |
 | let it throw             | a bug or an outage; the caller sees `internal`                             |
 
-## 12. Glossary
+## 12. Platforms and providers
+
+Plugins never talk to Twitch, YouTube or Kick themselves. Two **domain** plugins describe what
+platforms offer, platform-neutrally:
+
+- **`chat`** ([plugins/chat](../plugins/chat/README.md)): messages in (`chat.message`), messages
+  out (`chat.send`, `chat.reply`, `chat.broadcast`), moderation (`chat.delete`, `chat.timeout`),
+  the `chat.beforeSend` hook and the Chat widget.
+- **`stream`** ([plugins/stream](../plugins/stream/README.md)): community events
+  (`stream.follow`, `stream.subscription`, `stream.giftSubscription`, `stream.raid`,
+  `stream.support`, `stream.online`, `stream.offline`) and the Activity widget.
+
+**Platform plugins** (`twitch`, later others) implement the domains through **providers**, once per
+**connection** (`twitch:roman`). A consumer written against `chat` works on every platform,
+including ones added later.
+
+### Using the domains
+
+Depend on the domain like on any plugin (section 9): in `package.json`, list it under
+`petalbot.dependencies` (`"chat": "^1.0.0"`) and add the package (`"@petalbot-plugin/chat":
+"workspace:*"`), then import its contract from `@petalbot-plugin/chat/contract`:
+
+```ts
+import { chatContract } from '@petalbot-plugin/chat/contract';
+
+export default definePlugin(greeterContract, {
+  dependencies: [chatContract],
+  setup(ctx) {
+    ctx.on('chat.message', async ({ payload: message }) => {
+      // The bot's own messages arrive here too: never react to them.
+      if (message.fromBot || message.text !== '!hello') return;
+      const result = await ctx.call('chat.reply', { to: message, text: 'Hi!' });
+      if (!result.ok) ctx.log.warn('Could not greet', { reason: result.reason });
+    });
+  },
+});
+```
+
+- **Targets.** `{ connection: 'twitch:roman' }`, or `{ platform: 'twitch' }` for that platform's
+  default connection (or its only one). Replies go where the message came from.
+- **Results, not exceptions.** Every operation answers `{ ok: true, ... }` or
+  `{ ok: false, reason, message }`: `not-found` (no such connection), `unsupported` (the platform
+  can't do it), `forbidden` (a `chat.beforeSend` tap vetoed, or the platform refused),
+  `rate-limited` (not sent: too many messages) or `platform-error` (the platform failed).
+- **Replies.** `chat.reply` answers natively where the platform can (`delivery: 'native'`), else
+  the platform mentions the author in its own syntax (`delivery: 'mention'`).
+- **`chat.broadcast`** sends to every connection at once (or those of `platforms` /
+  `connections`) and returns one result per connection; one failure blocks no other.
+- **`chat.beforeSend`** lets a plugin rewrite or veto every outgoing message (send, reply,
+  broadcast), e.g. a filter: `ctx.hook('chat.beforeSend', (input, { veto }) => ...)`.
+  `input.caller` says who sends: a plugin id, or `client` for the panel.
+- **`chat.connections()`** lists the connections and what each can do (`capabilities`).
+- **Stream events** carry `source` like chat messages; an event a platform doesn't have is never
+  emitted for it.
+
+### Writing a platform plugin
+
+A platform plugin lists `chat` and/or `stream` as **required** dependencies (an optional one is
+not restarted with the domain, so its connections would be lost for good when the domain
+reloads) and does three things per connection:
+
+```ts
+const id = `twitch:${login}`; // <platform>:<channel>
+// 1. Provide: the domain calls these. Every method is optional.
+ctx.provide('chat.platform', id, {
+  send: async ({ text }) => limiter.schedule(() => api.send(text)).then(toResult),
+});
+// 2. Announce the connection; only the plugin providing `id` may.
+await ctx.call('chat.registerConnection', {
+  id,
+  platform: 'twitch',
+  channel: login,
+  displayName,
+  isDefault: true,
+});
+// 3. Feed inbound messages; the domain emits chat.message.
+await ctx.call('chat.ingest', { id: msg.id, source: { platform: 'twitch', connection: id }, ... });
+```
+
+- **Providers answer with a `Result`.** Map the platform's answers: a dropped or refused message
+  is `rate-limited` or `forbidden`, a 5xx is `platform-error`. A provider that throws becomes a
+  `platform-error` too, and is logged as a bug.
+- **Rate limiting lives in the provider** (`createRateLimiter`, one per connection), not in the
+  domain. `rate-limited` always means "not sent".
+- **Own the reply fallback.** Without native replies, mention the author in the platform's own
+  syntax and answer `delivery: 'mention'`; the domain never rewrites text.
+- **Set `fromBot`** on messages written by the bot's account. `chat.ingest` drops a message id
+  it already has for that connection, so redelivered messages are harmless.
+- **Connections end with their provider.** Disposing the provider, or stopping the plugin,
+  removes the connection; after providing it again, register it again. Re-registering replaces
+  the info (e.g. a new `isDefault`).
+- **`stream` works the same way:** provide `stream.platform` (no methods yet, it ties the
+  connection to your plugin), call `stream.registerConnection` (with `live`/`since` if the stream
+  is already running, also when registering again) and `stream.ingest({ type: 'follow', source, user })`.
+
+### Owning a provider slot
+
+A domain author resolves its slot with `ctx.providers('chat.platform')`: `keys()`, `get(key)`
+(a handle whose `call` validates input and output) and `onChange(fn)`, which reports every
+provider that comes or goes after subscribing (no replay: `keys()` lists the current ones). Check `handle.pluginId` against the RPC's `caller` before accepting
+anything on a connection's behalf, and check `handle.has(method)` before running hooks for an
+operation the provider can't do.
+
+### Testing
+
+- **Consumers** fake the domain's RPCs and emit its events:
+  `createTestHarness(greeter, { fakes: { chat: { rpc: { reply: async () => ({ ok: true, messageId: 'r1', delivery: 'native' }) } } } })`,
+  then `harness.emit('chat.message', message)`.
+- **Platform plugins** fake `registerConnection` and `ingest` to record what arrives, and call
+  their own provider the way the domain would: `harness.provider('chat.platform', 'twitch:roman')`.
+- **Domains** get fake providers: `providers: { 'chat.platform': { 'twitch:test': fake } }`, and
+  `harness.addProvider(...)` mid-test. They come from the same harness plugin as `harness.call`,
+  so the test may register those connections and ingest for them (see `plugins/chat/test`).
+
+## 13. Glossary
 
 - **Caller:** who called an RPC: a plugin id, or `'client'` for the panel and overlays. RPC
   implementations get it with `client` and `who` (section 4).
 - **Choice:** a string field (`choice('<plugin>.<rpc>')`) whose valid values an RPC lists at
   runtime; forms show it as a select (section 3).
 - **Connection:** one platform account the bot is attached to, e.g. `twitch:roman`. Providers
-  are keyed by connection (section 11).
+  are keyed by connection (section 12).
 - **Contract:** the isomorphic description of a plugin's events, RPCs, hooks, providers,
   settings, widgets and overlays (section 3).
 - **`ctx`:** the plugin context `setup` receives: events, RPCs, storage, timers (section 4).
 - **Domain:** a platform-neutral plugin such as `chat` or `stream` that defines what platforms
-  offer; platform plugins implement it through providers.
+  offer; platform plugins implement it through providers (section 12).
 - **Event:** a fire-and-forget announcement with a validated payload (section 3).
 - **Exposure:** which members the panel (with a minimum role) and overlays may use: `expose` on
   events and RPCs (section 3).
@@ -576,7 +690,7 @@ repeated values and lose the cause.
 - **Plugin DB:** the plugin's own Drizzle/SQLite database with `<id>_` tables (section 4).
 - **Preset:** a user's named dashboard layout, holding widget instances.
 - **Provider and slot:** a slot is an interface a contract defines; a provider is another
-  plugin's implementation of it for one connection.
+  plugin's implementation of it for one connection (section 12).
 - **Qualified name:** `<contract id>.<member>`, e.g. `counter.changed`; the only way names are
   written.
 - **Query:** an RPC with `kind: 'query'`: it only reads, and clients get `useQuery` for it,
@@ -587,7 +701,7 @@ repeated values and lose the cause.
 - **Secrets:** encrypted per-plugin values such as tokens; never sent to the panel. Declared in the contract; the owner enters user-settable ones in the Secrets card.
 - **Settings:** plugin-wide options from the contract's schema, edited in the panel (section 6).
 - **Target:** where a platform operation goes: `{ platform }` (its default connection) or
-  `{ connection }`.
+  `{ connection }` (section 12).
 - **Veto:** a hook handler's answer that stops the action: `(input, { veto }) => veto(reason)`.
 - **Widget / widget instance:** a dashboard tile a plugin defines / one placed copy of it with
   its own config (section 6).

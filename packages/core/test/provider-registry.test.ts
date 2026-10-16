@@ -122,3 +122,41 @@ describe('ProviderRegistry', () => {
     await expect(handle?.call('write', { text: 'hello' })).resolves.toEqual({ id: 'id-hello' });
   });
 });
+
+describe('ProviderRegistry change listeners', () => {
+  it('reports added and removed providers of the slot, once each', () => {
+    const registry = new ProviderRegistry();
+    const changes: unknown[] = [];
+    registry.view(SLOT).onChange((change) => changes.push(change));
+    registry.view('other.slot').onChange(() => changes.push('wrong slot'));
+    const dispose = registry.register('twitch', SLOT, slotDef, 'twitch:roman', { write });
+    dispose();
+    dispose();
+    expect(changes).toEqual([
+      { key: 'twitch:roman', pluginId: 'twitch', change: 'added' },
+      { key: 'twitch:roman', pluginId: 'twitch', change: 'removed' },
+    ]);
+  });
+
+  it('stops calling a listener after its disposer ran', () => {
+    const registry = new ProviderRegistry();
+    const changes: string[] = [];
+    const listener = (change: { change: string }) => changes.push(change.change);
+    const first = registry.view(SLOT).onChange(listener);
+    registry.view(SLOT).onChange(listener);
+    first();
+    registry.register('twitch', SLOT, slotDef, 'twitch:roman', { write });
+    expect(changes).toEqual(['added']);
+  });
+
+  it('reports nothing for a refused registration', () => {
+    const registry = new ProviderRegistry();
+    const changes: string[] = [];
+    registry.register('twitch', SLOT, slotDef, 'twitch:roman', { write });
+    registry.view(SLOT).onChange((change) => changes.push(change.change));
+    expect(() => registry.register('kick', SLOT, slotDef, 'twitch:roman', { write })).toThrow(
+      AccessError,
+    );
+    expect(changes).toEqual([]);
+  });
+});

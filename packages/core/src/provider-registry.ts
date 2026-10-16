@@ -1,6 +1,7 @@
 import {
   AccessError,
   UnsupportedCapabilityError,
+  type ProviderChange,
   type ProviderHandle,
   type ProviderSlotDef,
   type ProviderView,
@@ -26,6 +27,7 @@ interface Registration {
 export class ProviderRegistry {
   readonly #contracts: ContractRegistry | undefined;
   readonly #slots = new Map<string, Map<string, Registration>>();
+  readonly #listeners = new Map<string, Set<(change: ProviderChange) => void>>();
 
   /** With `contracts`, calls are validated against the slot owner's running contract. */
   constructor(contracts?: ContractRegistry) {
@@ -58,8 +60,11 @@ export class ProviderRegistry {
     }
     const registration: Registration = { pluginId, key, slotDef, impl };
     registrations.set(key, registration);
+    this.#notify(slot, { key, pluginId, change: 'added' });
     return once(() => {
-      if (registrations.get(key) === registration) registrations.delete(key);
+      if (registrations.get(key) !== registration) return;
+      registrations.delete(key);
+      this.#notify(slot, { key, pluginId, change: 'removed' });
     });
   }
 
@@ -72,7 +77,27 @@ export class ProviderRegistry {
           ? handleFor(slot, registration, () => this.#currentDef(slot) ?? registration.slotDef)
           : undefined;
       },
+      onChange: (listener) => {
+        let listeners = this.#listeners.get(slot);
+        if (!listeners) {
+          listeners = new Set();
+          this.#listeners.set(slot, listeners);
+        }
+        // A wrapper per call, so subscribing the same function twice gives two subscriptions.
+        const entry = (change: ProviderChange) => {
+          listener(change);
+        };
+        listeners.add(entry);
+        return once(() => {
+          listeners.delete(entry);
+        });
+      },
     };
+  }
+
+  /** Listeners must not throw; plugin contexts wrap them (see `providers()` there). */
+  #notify(slot: string, change: ProviderChange): void {
+    for (const listener of [...(this.#listeners.get(slot) ?? [])]) listener(change);
   }
 
   #currentDef(slot: string): ProviderSlotDef | undefined {
