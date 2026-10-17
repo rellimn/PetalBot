@@ -53,7 +53,7 @@ broadcaster. Chat waits for the bot.
 - Messages are sent with the **app token**, so they carry Twitch's "Chat Bot" badge. Replies
   are native (`delivery: 'native'`).
 - **Rate limits**, per channel: a bot that is a moderator or VIP sends up to 100 messages per
-  30 s; otherwise 20 per 30 s and at most one per second. PetalBot uses 90% of that, queues up to
+  30 s; otherwise 20 per 30 s and at most one every 1.5 s. PetalBot uses 90% of that, queues up to
   20 sends for at most 10 s, and follows the bot's role live (moderator and VIP events). When
   Twitch still refuses a message for its rate limit (HTTP 429), sending pauses for 30 s. Twitch
   also refuses a message identical to the bot's previous one within 30 s.

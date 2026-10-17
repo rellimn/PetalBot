@@ -7,7 +7,7 @@
  * arrive, the live status in the info (spec §24.10: `update` on every transition).
  *
  * Chat (with a bot): `chat.platform` under the same key, sending through a rate limiter sized by
- * the bot's role (moderator or VIP: 100 per 30 s; otherwise 20 per 30 s, one per second), which
+ * the bot's role (moderator or VIP: 100 per 30 s; otherwise 20 per 30 s, 1.5 s apart), which
  * follows the channel's moderator and VIP events.
  */
 import { createRateLimiter, sourceOf, type PluginContext } from '@petalbot/sdk';

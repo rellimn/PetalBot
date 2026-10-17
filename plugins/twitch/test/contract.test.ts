@@ -29,7 +29,7 @@ describe('twitch contract', () => {
   });
 
   it('sizes the chat limiter by role', () => {
-    expect(chatLimits('none')).toEqual({ limit: 20, minIntervalMs: 1000 });
+    expect(chatLimits('none')).toEqual({ limit: 20, minIntervalMs: 1500 });
     expect(chatLimits('vip')).toEqual({ limit: 100, minIntervalMs: 0 });
     expect(chatLimits('moderator')).toEqual({ limit: 100, minIntervalMs: 0 });
   });

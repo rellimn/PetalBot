@@ -162,14 +162,14 @@ describe('chat provider', () => {
     await harness.stop();
   });
 
-  it('a plain bot sends at most one message per second', async () => {
+  it('a plain bot sends at most one message per 1.5 s', async () => {
     const { handle, harness, sends } = await startChat();
     vi.useFakeTimers({ now: Date.now(), toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const both = Promise.all([
       handle.call('send', { text: 'a' }),
       handle.call('send', { text: 'b' }),
     ]);
-    await vi.advanceTimersByTimeAsync(999);
+    await vi.advanceTimersByTimeAsync(1499);
     expect(sends()).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(sends()).toHaveLength(2);

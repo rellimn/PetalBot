@@ -36,11 +36,11 @@ export const CHAT_MAX_WAIT_MS = 10_000;
 export const RATE_LIMIT_PAUSE_MS = 30_000;
 
 /**
- * Twitch's chat limits: 100 messages per 30 s for moderators and VIPs; otherwise 20 per 30 s and
- * at most one per second.
+ * Twitch's chat limits: 100 messages per 30 s for moderators and VIPs; otherwise 20 per 30 s.
+ * A plain bot is also spaced 1.5 s apart: Twitch answered 429 to sends 1 s apart (checklist).
  */
 export function chatLimits(role: BotRole): { limit: number; minIntervalMs: number } {
-  return role === 'none' ? { limit: 20, minIntervalMs: 1000 } : { limit: 100, minIntervalMs: 0 };
+  return role === 'none' ? { limit: 20, minIntervalMs: 1500 } : { limit: 100, minIntervalMs: 0 };
 }
 
 /** After a refresh failed for a reason other than a refused token (network, Twitch down). */
