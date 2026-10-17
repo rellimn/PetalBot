@@ -97,9 +97,39 @@ describe('chat provider', () => {
     expect(await handle.call('send', { text: 'a' })).toMatchObject({
       ok: false,
       reason: 'platform-error',
-      error: { code: 'message-rejected' },
+      error: { code: 'message-rejected', cause: 'duplicate' },
       message: 'msg_duplicate: Duplicate',
     });
+    await harness.stop();
+  });
+
+  it('a drop for another reason has no cause', async () => {
+    const { handle, harness } = await startChat({
+      defaults: {
+        send: () => Promise.resolve({ sent: false, code: 'msg_banned', message: 'Banned' }),
+      },
+    });
+    const result = await handle.call('send', { text: 'a' });
+    expect(result).toMatchObject({ error: { code: 'message-rejected' } });
+    expect(result).not.toHaveProperty('error.cause');
+    await harness.stop();
+  });
+
+  it('a 429 pauses sending and answers rate-limited', async () => {
+    const tooFast = () => Promise.reject(new TwitchRequestError(429, 'Too Many Requests'));
+    const { handle, harness, sends } = await startChat({ defaults: { send: tooFast } });
+    expect(await handle.call('send', { text: 'a' })).toMatchObject({
+      ok: false,
+      reason: 'rate-limited',
+      message: 'Too Many Requests',
+    });
+    expect(
+      await handle.call('reply', {
+        to: { id: 'p', user: { ...viewer, badges } },
+        text: 'b',
+      }),
+    ).toMatchObject({ reason: 'rate-limited' });
+    expect(sends()).toHaveLength(1);
     await harness.stop();
   });
 

@@ -55,13 +55,15 @@ broadcaster. Chat waits for the bot.
 - **Rate limits**, per channel: a bot that is a moderator or VIP sends up to 100 messages per
   30 s; otherwise 20 per 30 s and at most one per second. PetalBot uses 90% of that, queues up to
   20 sends for at most 10 s, and follows the bot's role live (moderator and VIP events). When
-  Twitch still drops a message for its rate limit, sending pauses for 30 s.
+  Twitch still refuses a message for its rate limit (HTTP 429), sending pauses for 30 s. Twitch
+  also refuses a message identical to the bot's previous one within 30 s.
 - **Failures** (see the [chat failure contract](../chat/README.md#failure-contract)):
 
 | Twitch answer                         | Failure                                |
 | ------------------------------------- | -------------------------------------- |
-| Message dropped for the rate limit    | `rate-limited`                         |
-| Message dropped for any other reason  | `message-rejected`                     |
+| 429, or dropped for the rate limit    | `rate-limited` (sending pauses 30 s)   |
+| Dropped as a repeat (`msg_duplicate`) | `message-rejected`, `cause: duplicate` |
+| Dropped for any other reason          | `message-rejected`                     |
 | 401 / 403 (bot lacks the permission)  | `permission-denied`                    |
 | 404 on delete / timeout               | `message-not-found` / `user-not-found` |
 | 400 naming the reply's parent message | `message-not-found`                    |

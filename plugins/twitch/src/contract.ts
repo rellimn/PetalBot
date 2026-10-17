@@ -65,7 +65,7 @@ export type TwitchStatus = z.output<typeof TwitchStatus>;
 
 export const twitchContract = defineContract({
   id: 'twitch',
-  version: '1.1.0',
+  version: '1.1.1',
 
   settings: z.object({
     clientId: z

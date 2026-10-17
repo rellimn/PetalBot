@@ -1,6 +1,6 @@
 {
   "name": "@petalbot-plugin/twitch",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "type": "module",
   "exports": {
@@ -15,7 +15,7 @@
     "id": "twitch",
     "apiVersion": 3,
     "dependencies": {
-      "chat": "^3.0.0",
+      "chat": "^3.1.0",
       "stream": "^2.0.0"
     }
   },

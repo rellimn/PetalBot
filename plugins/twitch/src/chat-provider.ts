@@ -40,8 +40,14 @@ export interface ChatMethodsInput {
   readonly limiter: RateLimiter;
 }
 
-/** Twitch's drop codes for its chat rate limit (unverified: see the M5c manual checklist). */
+/**
+ * Twitch's drop codes for its chat rate limit. Sending too fast is usually a 429 instead (seen
+ * on the M5c checklist); a drop code is the fallback.
+ */
 export const isRateLimitDrop = (code: string): boolean => /rate.?limit/i.test(code);
+
+/** Dropped because it repeats the bot's previous message within 30 s (checklist: verified). */
+const DUPLICATE_DROP = 'msg_duplicate';
 
 /**
  * Request failures every method shares; anything that isn't a Twitch answer is rethrown. Rejected
@@ -85,7 +91,19 @@ export function createChatMethods(input: ChatMethodsInput): ProviderImpl<ChatPla
       limiter.pause(RATE_LIMIT_PAUSE_MS);
       return fail(rateLimitedFailure, {}, `${outcome.code}: ${outcome.message}`);
     }
-    return fail(messageRejected, {}, `${outcome.code}: ${outcome.message}`);
+    return fail(
+      messageRejected,
+      outcome.code === DUPLICATE_DROP ? { cause: 'duplicate' as const } : {},
+      `${outcome.code}: ${outcome.message}`,
+    );
+  };
+
+  /** Twitch's 429: like a rate-limit drop, sending pauses. */
+  const tooFast = (error: unknown) => {
+    if (!(error instanceof TwitchRequestError) || error.status !== 429) return undefined;
+    limiter.pause(RATE_LIMIT_PAUSE_MS);
+    log.warn('Twitch refused a chat message for its rate limit', { error: error.message });
+    return fail(rateLimitedFailure, {}, error.message);
   };
 
   return {
@@ -93,7 +111,7 @@ export function createChatMethods(input: ChatMethodsInput): ProviderImpl<ChatPla
       try {
         return await sendLimited(text);
       } catch (error) {
-        return failed(error, 'send');
+        return tooFast(error) ?? failed(error, 'send');
       }
     },
     async reply({ to, text }) {
@@ -108,7 +126,7 @@ export function createChatMethods(input: ChatMethodsInput): ProviderImpl<ChatPla
         ) {
           return fail(messageNotFound, { messageId: to.id }, error.message);
         }
-        return failed(error, 'reply');
+        return tooFast(error) ?? failed(error, 'reply');
       }
     },
     async delete({ messageId }) {
