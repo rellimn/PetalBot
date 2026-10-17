@@ -4,13 +4,13 @@
  */
 import { ChatMessageDroppedError } from '@twurple/api';
 import { describe, expect, it } from 'vitest';
-import { droppedOutcome, refreshFailureKind } from '../src/twitch-client.ts';
+import { appCredentialsRefused, droppedOutcome, refreshFailureKind } from '../src/twitch-client.ts';
 
 /** Twurple's HttpStatusCodeError, as the adapter reads it. */
-const httpError = (statusCode: number): Error =>
+const httpError = (statusCode: number, message = 'Invalid refresh token'): Error =>
   Object.assign(new Error(`Encountered HTTP status code ${String(statusCode)}`), {
     statusCode,
-    body: '{"status":400,"message":"Invalid refresh token"}',
+    body: JSON.stringify({ status: statusCode, message }),
   });
 
 describe('droppedOutcome', () => {
@@ -44,5 +44,19 @@ describe('refreshFailureKind', () => {
     expect(refreshFailureKind(httpError(401))).toBe('invalid');
     expect(refreshFailureKind(httpError(503))).toBe('transient');
     expect(refreshFailureKind(new TypeError('fetch failed'))).toBe('transient');
+  });
+
+  it('a refused client ID or secret is the app, not the account', () => {
+    expect(refreshFailureKind(httpError(403, 'invalid client secret'))).toBe('app');
+    expect(refreshFailureKind(httpError(400, 'invalid client'))).toBe('app');
+  });
+});
+
+describe('appCredentialsRefused', () => {
+  it('reads a refused app token request', () => {
+    expect(appCredentialsRefused(httpError(403, 'invalid client secret'))).toBe(true);
+    expect(appCredentialsRefused(httpError(400, 'invalid client'))).toBe(true);
+    expect(appCredentialsRefused(httpError(503, 'unavailable'))).toBe(false);
+    expect(appCredentialsRefused(new TypeError('fetch failed'))).toBe(false);
   });
 });

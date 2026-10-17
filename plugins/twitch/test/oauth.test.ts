@@ -140,6 +140,7 @@ describe('twitch.status', () => {
     const { harness } = await startTwitch({ credentials: false });
     expect(await harness.call('twitch.status')).toEqual({
       configured: false,
+      credentialsRejected: false,
       redirectUrl: CALLBACK,
       broadcaster: null,
       bot: null,

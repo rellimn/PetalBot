@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { TwitchRequestError } from '../src/twitch-client.ts';
+import { AppCredentialsError, TwitchRequestError } from '../src/twitch-client.ts';
 import { bot } from './fake-client.ts';
-import { startTwitch, type StartOptions } from './helpers.ts';
+import { recordingLogger, startTwitch, type StartOptions } from './helpers.ts';
 
 const KEY = 'twitch:roman';
 const viewer = { id: '7', login: 'viewer', displayName: 'Viewer' };
@@ -99,6 +99,35 @@ describe('chat provider', () => {
       reason: 'platform-error',
       error: { code: 'message-rejected' },
       message: 'msg_duplicate: Duplicate',
+    });
+    await harness.stop();
+  });
+
+  it('logs what Twitch answered for a failed send', async () => {
+    const logger = recordingLogger();
+    const { fake, handle, harness } = await startChat({
+      logger,
+      defaults: {
+        send: () => Promise.resolve({ sent: false, code: 'msg_duplicate', message: 'Duplicate' }),
+      },
+    });
+    await handle.call('send', { text: 'a' });
+    fake.last().send = () => Promise.reject(new TwitchRequestError(500, 'Twitch is down'));
+    await handle.call('send', { text: 'b' });
+    const warnings = logger.lines.filter((line) => line.startsWith('warn'));
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]).toContain('msg_duplicate');
+    expect(warnings[1]).toContain('Twitch is down');
+    await harness.stop();
+  });
+
+  it('rejected app credentials are a provider error that says so', async () => {
+    const { fake, handle, harness } = await startChat();
+    fake.last().send = () => Promise.reject(new AppCredentialsError());
+    expect(await handle.call('send', { text: 'a' })).toMatchObject({
+      reason: 'platform-error',
+      error: { code: 'provider-error', connection: KEY, capability: 'send' },
+      message: 'Twitch rejected the client ID or secret',
     });
     await harness.stop();
   });

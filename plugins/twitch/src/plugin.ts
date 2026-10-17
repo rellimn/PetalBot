@@ -7,7 +7,10 @@
  *   (by Twitch user id), the accounts in KV `accounts`.
  * - A runtime (src/runtime.ts) serves the domains for the current credentials and accounts. Any
  *   change to them replaces it. An account whose token Twitch refused to refresh is left out
- *   ("Reconnect required", in memory: a restart tries the stored token again).
+ *   ("Reconnect required", in memory: a restart tries the stored token again), and so is one
+ *   whose authorization was revoked at Twitch.
+ * - When Twitch refuses the client ID or secret, the status says so and the runtime keeps going
+ *   (the accounts' tokens still work); new credentials clear it.
  *
  * Guide: docs/plugin-guide.md#12-platforms-and-providers; setup: plugins/twitch/README.md.
  */
@@ -25,7 +28,12 @@ import { authorizeUrl, backToPage, createPendingLogins, hasScopes, redirect } fr
 import { errorText } from './redact.ts';
 import { startRuntime, type Runtime } from './runtime.ts';
 import { REFRESH_RETRY_MS, STATUS_WAIT_MS } from './scopes.ts';
-import type { RefreshFailure, TwitchClient, TwitchClientFactory } from './twitch-client.ts';
+import {
+  AppCredentialsError,
+  type RefreshFailure,
+  type TwitchClient,
+  type TwitchClientFactory,
+} from './twitch-client.ts';
 
 export function createTwitchPlugin(createClient: TwitchClientFactory) {
   return definePlugin(twitchContract, {
@@ -41,8 +49,17 @@ export function createTwitchPlugin(createClient: TwitchClientFactory) {
         return clientId !== '' && clientSecret !== '' ? { clientId, clientSecret } : null;
       };
 
-      /** User ids whose token Twitch refused to refresh. */
+      /** User ids whose token Twitch refused to refresh, or whose authorization it revoked. */
       const reconnectRequired = new Set<string>();
+      /** Twitch refused the current client ID or secret; reset when they change. */
+      let credentialsRejected = false;
+
+      const appRejected = (): void => {
+        if (credentialsRejected) return;
+        credentialsRejected = true;
+        ctx.log.warn('Twitch rejected the client ID or secret; save the current ones');
+        changed();
+      };
 
       /** A client for the current credentials; tokens it refreshes are stored. */
       const newClient = (app: { clientId: string; clientSecret: string }): TwitchClient =>
@@ -59,12 +76,24 @@ export function createTwitchPlugin(createClient: TwitchClientFactory) {
           onRefreshFailure: (userId, kind) => {
             refreshFailed(userId, kind).catch(() => undefined);
           },
+          onAppRejected: appRejected,
         });
 
       /** A pending retry after a transient refresh failure (one at a time). */
       let retry: (() => void) | undefined;
 
+      /** Leaves the account out until it is reconnected. */
+      const requireReconnect = (kind: AccountKind, userId: string, message: string): void => {
+        reconnectRequired.add(userId);
+        ctx.log.warn(message, { account: kind });
+        startRebuild();
+      };
+
       const refreshFailed = async (userId: string, failure: RefreshFailure): Promise<void> => {
+        if (failure === 'app') {
+          appRejected();
+          return;
+        }
         const accounts = (await ctx.kv.get('accounts')) ?? {};
         const kind = AccountKind.options.find((name) => accounts[name]?.id === userId);
         if (kind === undefined || reconnectRequired.has(userId)) return;
@@ -78,9 +107,12 @@ export function createTwitchPlugin(createClient: TwitchClientFactory) {
           });
           return;
         }
-        reconnectRequired.add(userId);
-        ctx.log.warn('Twitch token refresh failed; reconnect the account', { account: kind });
-        startRebuild();
+        requireReconnect(kind, userId, 'Twitch token refresh failed; reconnect the account');
+      };
+
+      const revoked = (kind: AccountKind, userId: string): void => {
+        if (reconnectRequired.has(userId)) return;
+        requireReconnect(kind, userId, 'Twitch access was revoked; reconnect the account');
       };
 
       const changed = (): void => {
@@ -105,13 +137,24 @@ export function createTwitchPlugin(createClient: TwitchClientFactory) {
         const bot =
           accounts.bot && !reconnectRequired.has(accounts.bot.id) ? accounts.bot : undefined;
         const botToken = bot ? await ctx.secrets.get('tokens', bot.id) : undefined;
+        const client = newClient(app);
+        // A refusal is reported through `onAppRejected`; anything else (network) shows up later.
+        await client.verifyApp().catch((error: unknown) => {
+          if (error instanceof AppCredentialsError) return;
+          ctx.log.debug('Could not check the Twitch app credentials', { error: errorText(error) });
+        });
+        const accountOf = { broadcaster, bot };
         return await startRuntime({
           ctx,
-          client: newClient(app),
+          client,
           broadcaster,
           ...(bot && botToken ? { bot } : {}),
           tokens: { broadcaster: broadcasterToken, ...(botToken ? { bot: botToken } : {}) },
           onChange: changed,
+          onRevoked: (kind) => {
+            const account = accountOf[kind];
+            if (account) revoked(kind, account.id);
+          },
         });
       };
 
@@ -153,10 +196,14 @@ export function createTwitchPlugin(createClient: TwitchClientFactory) {
       /** Called after an account was connected or removed. */
       const onAccountsChanged = rebuild;
 
+      const credentialsChanged = (): void => {
+        credentialsRejected = false;
+        startRebuild();
+      };
       ctx.settings.onChange((next, previous) => {
-        if (next.clientId !== previous.clientId) startRebuild();
+        if (next.clientId !== previous.clientId) credentialsChanged();
       });
-      ctx.secrets.onChange('clientSecret', startRebuild);
+      ctx.secrets.onChange('clientSecret', credentialsChanged);
 
       ctx.onDispose(async () => {
         stopped = true;
@@ -252,6 +299,7 @@ export function createTwitchPlugin(createClient: TwitchClientFactory) {
             const accounts = (await ctx.kv.get('accounts')) ?? {};
             return {
               configured: (await credentials()) !== null,
+              credentialsRejected,
               redirectUrl: redirectUri,
               broadcaster: statusOf(accounts.broadcaster),
               bot: statusOf(accounts.bot),

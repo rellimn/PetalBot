@@ -14,6 +14,7 @@ import { createRateLimiter, sourceOf, type PluginContext } from '@petalbot/sdk';
 import type { chatContract } from '@petalbot-plugin/chat/contract';
 import type { InboundStreamEvent, streamContract } from '@petalbot-plugin/stream/contract';
 import type {
+  AccountKind,
   Accounts,
   BotRole,
   SocketState,
@@ -53,10 +54,15 @@ export interface RuntimeInput {
   readonly tokens: { readonly broadcaster: TwitchToken; readonly bot?: TwitchToken | undefined };
   /** Called after anything in `status` changed. */
   readonly onChange: () => void;
+  /** Twitch revoked the account's authorization: its token is dead. */
+  readonly onRevoked: (kind: AccountKind) => void;
 }
 
+/** Revocation statuses after which the account's token no longer works. */
+const DEAD_TOKEN = new Set(['authorization_revoked', 'user_removed']);
+
 export async function startRuntime(input: RuntimeInput): Promise<Runtime> {
-  const { ctx, client, broadcaster, onChange } = input;
+  const { ctx, client, broadcaster, onChange, onRevoked } = input;
   const key = `twitch:${broadcaster.login}`;
   const status: RuntimeStatus = { eventSub: { broadcaster: 'off', bot: 'off' }, botRole: null };
 
@@ -77,10 +83,16 @@ export async function startRuntime(input: RuntimeInput): Promise<Runtime> {
     info: since === undefined ? { ...channel, live: false } : { ...channel, live: true, since },
   });
 
-  /** Runs a notification handler; a bad payload is logged, never thrown into Twurple. */
+  /** Set before the listener stops: Twurple still reports the sockets closing. */
+  let disposed = false;
+  /**
+   * Runs a notification handler; a bad payload is logged, never thrown into Twurple. Nothing
+   * runs once the runtime is disposed.
+   */
   const guarded =
     <A extends unknown[]>(name: string, handler: (...args: A) => void) =>
     (...args: A): void => {
+      if (disposed) return;
       try {
         handler(...args);
       } catch (error) {
@@ -143,6 +155,10 @@ export async function startRuntime(input: RuntimeInput): Promise<Runtime> {
       status.eventSub[kind] = state;
       onChange();
     }),
+    revoked: guarded('revoked', ({ kind, status: reason }) => {
+      if (DEAD_TOKEN.has(reason)) onRevoked(kind);
+      else ctx.log.warn('Twitch ended an EventSub subscription', { account: kind, reason });
+    }),
   };
   const listener = client.listen(
     bot ? { broadcasterId: broadcaster.id, botId: bot.id } : { broadcasterId: broadcaster.id },
@@ -152,6 +168,7 @@ export async function startRuntime(input: RuntimeInput): Promise<Runtime> {
   return {
     status,
     dispose() {
+      disposed = true;
       listener.stop();
       chat?.dispose();
       stream.dispose();
@@ -190,6 +207,7 @@ async function startChat(
     info: { channel: broadcaster.login, displayName: broadcaster.displayName, isDefault: true },
     methods: createChatMethods({
       key,
+      log: ctx.log,
       client,
       broadcasterId: broadcaster.id,
       botId: bot.id,

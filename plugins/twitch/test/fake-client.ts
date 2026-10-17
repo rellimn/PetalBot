@@ -4,12 +4,13 @@
  */
 import type { BotRole, TwitchAccount, TwitchToken } from '../src/contract.ts';
 import { SCOPES } from '../src/scopes.ts';
-import type {
-  SendOutcome,
-  TwitchClient,
-  TwitchClientFactory,
-  TwitchClientOptions,
-  TwitchEventHandlers,
+import {
+  AppCredentialsError,
+  type SendOutcome,
+  type TwitchClient,
+  type TwitchClientFactory,
+  type TwitchClientOptions,
+  type TwitchEventHandlers,
 } from '../src/twitch-client.ts';
 
 export const broadcaster: TwitchAccount = { id: '1', login: 'roman', displayName: 'Roman' };
@@ -51,6 +52,8 @@ export interface FakeDefaults {
   role?: FakeClient['role'];
   send?: FakeClient['send'];
   revoke?: FakeClient['revokeImpl'];
+  /** Twitch refuses the app credentials (`verifyApp` reports and throws). */
+  appRejected?: boolean;
 }
 
 export function createFakeClient(defaults: FakeDefaults = {}) {
@@ -85,6 +88,12 @@ export function createFakeClient(defaults: FakeDefaults = {}) {
       tokenUser(token) {
         record('tokenUser', token);
         return client.user(token);
+      },
+      verifyApp() {
+        record('verifyApp', null);
+        if (!defaults.appRejected) return Promise.resolve();
+        options.onAppRejected();
+        return Promise.reject(new AppCredentialsError());
       },
       revoke(token) {
         record('revoke', token);

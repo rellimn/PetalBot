@@ -11,10 +11,11 @@ import type { TwitchStatus } from '../src/contract.ts';
 import panel from '../src/panel.tsx';
 
 const TwitchPage = panel.pages[0]?.component ?? (() => null);
-const REDIRECT = 'http://127.0.0.1:5173/api/p/twitch/auth/callback';
+const REDIRECT = 'http://localhost:5173/api/p/twitch/auth/callback';
 
 const status = (overrides: Partial<TwitchStatus> = {}): TwitchStatus => ({
   configured: true,
+  credentialsRejected: false,
   redirectUrl: REDIRECT,
   broadcaster: { id: '1', login: 'roman', displayName: 'Roman', state: 'connected' },
   bot: { id: '2', login: 'petalbot', displayName: 'PetalBot', state: 'reconnect-required' },
@@ -67,6 +68,15 @@ describe('Twitch page', () => {
   it('says when the application is not configured', async () => {
     await renderPage(status({ configured: false, broadcaster: null, bot: null, botRole: null }));
     expect(screen.getByText(/Not configured/)).toBeTruthy();
+  });
+
+  it('says when Twitch rejected the credentials', async () => {
+    await renderPage(status({ credentialsRejected: true }));
+    expect(
+      screen.getByText(
+        'Twitch rejected the client ID or secret. Save the current ones from your Twitch application',
+      ),
+    ).toBeTruthy();
   });
 
   it('warns when the bot is not a moderator', async () => {

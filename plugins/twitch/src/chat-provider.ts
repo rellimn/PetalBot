@@ -3,7 +3,14 @@
  * connection's rate limiter, and Twitch's answers mapped to chat's failure definitions
  * (plugins/chat/README.md#failure-contract). Twitch's own wording only goes into `message`.
  */
-import { fail, ok, rateLimitedFailure, type ProviderImpl, type RateLimiter } from '@petalbot/sdk';
+import {
+  fail,
+  ok,
+  rateLimitedFailure,
+  type Logger,
+  type ProviderImpl,
+  type RateLimiter,
+} from '@petalbot/sdk';
 import {
   messageNotFound,
   messageRejected,
@@ -14,12 +21,19 @@ import {
   type chatContract,
 } from '@petalbot-plugin/chat/contract';
 import { RATE_LIMIT_PAUSE_MS } from './scopes.ts';
-import { TwitchRequestError, type SendOutcome, type TwitchClient } from './twitch-client.ts';
+import {
+  AppCredentialsError,
+  TwitchRequestError,
+  type SendOutcome,
+  type TwitchClient,
+} from './twitch-client.ts';
 
 type ChatPlatformSlot = (typeof chatContract)['providers']['platform'];
 
 export interface ChatMethodsInput {
   readonly key: string;
+  /** Gets what Twitch answered to a failed request (the chat failure carries no wording). */
+  readonly log: Logger;
   readonly client: TwitchClient;
   readonly broadcasterId: string;
   readonly botId: string;
@@ -29,9 +43,20 @@ export interface ChatMethodsInput {
 /** Twitch's drop codes for its chat rate limit (unverified: see the M5c manual checklist). */
 export const isRateLimitDrop = (code: string): boolean => /rate.?limit/i.test(code);
 
-/** Request failures every method shares; anything that isn't a Twitch answer is rethrown. */
-function classify(error: unknown, key: string, capability: Capability) {
+/**
+ * Request failures every method shares; anything that isn't a Twitch answer is rethrown. Rejected
+ * app credentials are logged once by the plugin, not per request.
+ */
+function classify(error: unknown, key: string, capability: Capability, log: Logger) {
+  if (error instanceof AppCredentialsError) {
+    return fail(providerError, { connection: key, capability }, error.message);
+  }
   if (!(error instanceof TwitchRequestError)) throw error;
+  log.warn('Twitch refused a chat request', {
+    capability,
+    status: error.status,
+    error: error.message,
+  });
   if (error.status === 401 || error.status === 403) {
     return fail(permissionDenied, {}, error.message);
   }
@@ -39,7 +64,8 @@ function classify(error: unknown, key: string, capability: Capability) {
 }
 
 export function createChatMethods(input: ChatMethodsInput): ProviderImpl<ChatPlatformSlot> {
-  const { key, client, broadcasterId, botId, limiter } = input;
+  const { key, log, client, broadcasterId, botId, limiter } = input;
+  const failed = (error: unknown, capability: Capability) => classify(error, key, capability, log);
 
   /** Sends through the limiter; `rate-limited` means Twitch never saw the message. */
   const sendLimited = async (text: string, replyTo?: string) => {
@@ -54,6 +80,7 @@ export function createChatMethods(input: ChatMethodsInput): ProviderImpl<ChatPla
     if (!scheduled.ok) return scheduled;
     const outcome: SendOutcome = scheduled.value;
     if (outcome.sent) return { ok: true as const, messageId: outcome.messageId };
+    log.warn('Twitch dropped a chat message', { code: outcome.code, reason: outcome.message });
     if (isRateLimitDrop(outcome.code)) {
       limiter.pause(RATE_LIMIT_PAUSE_MS);
       return fail(rateLimitedFailure, {}, `${outcome.code}: ${outcome.message}`);
@@ -66,7 +93,7 @@ export function createChatMethods(input: ChatMethodsInput): ProviderImpl<ChatPla
       try {
         return await sendLimited(text);
       } catch (error) {
-        return classify(error, key, 'send');
+        return failed(error, 'send');
       }
     },
     async reply({ to, text }) {
@@ -81,7 +108,7 @@ export function createChatMethods(input: ChatMethodsInput): ProviderImpl<ChatPla
         ) {
           return fail(messageNotFound, { messageId: to.id }, error.message);
         }
-        return classify(error, key, 'reply');
+        return failed(error, 'reply');
       }
     },
     async delete({ messageId }) {
@@ -92,7 +119,7 @@ export function createChatMethods(input: ChatMethodsInput): ProviderImpl<ChatPla
         if (error instanceof TwitchRequestError && error.status === 404) {
           return fail(messageNotFound, { messageId }, error.message);
         }
-        return classify(error, key, 'delete');
+        return failed(error, 'delete');
       }
     },
     async timeout({ userId, seconds, reason }) {
@@ -109,7 +136,7 @@ export function createChatMethods(input: ChatMethodsInput): ProviderImpl<ChatPla
         if (error instanceof TwitchRequestError && error.status === 404) {
           return fail(userNotFound, { userId }, error.message);
         }
-        return classify(error, key, 'timeout');
+        return failed(error, 'timeout');
       }
     },
   };

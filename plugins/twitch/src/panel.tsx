@@ -174,6 +174,12 @@ function TwitchPage() {
   return (
     <div className={styles.page}>
       <Card title="Application">
+        {status.credentialsRejected ? (
+          <Banner tone="danger">
+            Twitch rejected the client ID or secret. Save the current ones from your Twitch
+            application
+          </Banner>
+        ) : null}
         <p className={styles.muted}>
           {status.configured ? null : 'Not configured. '}
           Register this redirect URL in your Twitch application, then set its{' '}

@@ -51,6 +51,8 @@ export type BotRole = z.output<typeof BotRole>;
 export const TwitchStatus = z.object({
   /** Client ID and client secret are set. */
   configured: z.boolean(),
+  /** Twitch refused the client ID or secret (e.g. the secret was regenerated at Twitch). */
+  credentialsRejected: z.boolean(),
   /** The OAuth redirect URL to register in the Twitch application. */
   redirectUrl: z.string(),
   broadcaster: AccountStatus.nullable(),
@@ -63,7 +65,7 @@ export type TwitchStatus = z.output<typeof TwitchStatus>;
 
 export const twitchContract = defineContract({
   id: 'twitch',
-  version: '1.0.0',
+  version: '1.1.0',
 
   settings: z.object({
     clientId: z

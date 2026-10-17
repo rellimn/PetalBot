@@ -11,7 +11,8 @@ consumers use `chat.*` and `stream.*` and never see Twitch. How the pieces fit:
    (category "Chat Bot", client type "Confidential").
 2. Open the **Twitch** page in the panel and register its **redirect URL** in the application
    exactly as shown (`<publicUrl>/api/p/twitch/auth/callback`). Twitch compares it character by
-   character; plain `http` works only for `localhost`.
+   character; plain `http` works only for `localhost` (not `127.0.0.1`), so a local `publicUrl`
+   must use `http://localhost:<port>`.
 3. Paste the application's **Client ID** into the plugin's settings and its **client secret**
    into the Secrets card on the same settings page.
 4. **Connect broadcaster** while logged in to Twitch as the broadcaster.
@@ -22,6 +23,11 @@ consumers use `chat.*` and `stream.*` and never see Twitch. How the pieces fit:
 
 Only the owner can connect or disconnect accounts; mods see the page read-only. Changing the
 client ID or secret reconnects; the accounts stay connected.
+
+When Twitch refuses the client ID or secret (for example after **New Secret** in the Twitch
+console without saving it here), the Application card says so and the log gets one warning.
+Stream events keep working on the accounts' tokens; sending fails with `provider-error` until the
+current secret is saved.
 
 ## What each account grants
 
@@ -61,7 +67,8 @@ broadcaster. Chat waits for the bot.
 | 400 naming the reply's parent message | `message-not-found`                    |
 | Anything else                         | `provider-error`                       |
 
-Twitch's own wording is kept in the failure's diagnostic `message`, never shown as UI copy.
+Twitch's own wording is kept in the failure's diagnostic `message`, never shown as UI copy. Every
+dropped or refused request is also logged at warn level with Twitch's code and reason.
 
 ## The `twitch` contract
 
@@ -71,16 +78,18 @@ Only what the domains can't express:
 | -------------------------------- | --------------------------------------------------------------------------- |
 | `twitch.connectionChanged`       | An account, the bot's role or an EventSub connection changed (panel)        |
 | `twitch.cheer`                   | `{ source, user?, bits, message }`; also arrives as `stream.support`        |
-| `twitch.status()`                | Accounts, "Reconnect required", the bot's role, EventSub state (`mod`)      |
+| `twitch.status()`                | Accounts, "Reconnect required", rejected credentials, bot role, EventSub    |
 | `twitch.disconnect({ account })` | Revokes the token at Twitch (best effort) and forgets the account (`owner`) |
 
 ## Tokens
 
-Tokens are stored encrypted per Twitch user id and refreshed automatically. When Twitch refuses a
-refresh token (the app was disconnected at twitch.tv/settings/connections), the account shows
-**Reconnect required**: a bot account drops chat, a broadcaster account stops everything until
-it is reconnected. A restart tries the stored token again. Other refresh failures (network,
-Twitch down) keep the account and retry after a minute.
+Tokens are stored encrypted per Twitch user id and refreshed automatically. When the app is
+disconnected at twitch.tv/settings/connections, Twitch ends the account's EventSub subscriptions
+(`authorization_revoked`) and the account shows **Reconnect required** at once; the same happens
+when Twitch refuses a refresh token. A bot account then drops chat, a broadcaster account stops
+everything until it is reconnected. A restart tries the stored token again. Other refresh
+failures (network, Twitch down) keep the account and retry after a minute; a refresh refused
+because of the client secret counts as rejected credentials, not as a dead account.
 
 Nothing the plugin logs about Twitch contains the client secret, tokens or OAuth codes: Twurple's
 error messages quote request URLs, so they are redacted first.

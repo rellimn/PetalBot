@@ -27,17 +27,30 @@ export class TwitchRequestError extends Error {
   }
 }
 
+/** Twitch refused the app's client ID or secret (e.g. the secret was regenerated). */
+export class AppCredentialsError extends Error {
+  constructor(options?: ErrorOptions) {
+    super('Twitch rejected the client ID or secret', options);
+    this.name = 'AppCredentialsError';
+  }
+}
+
 export interface TwitchClientOptions {
   readonly clientId: string;
   readonly clientSecret: string;
   /** Receives Twurple's warnings and errors. */
   readonly log: Logger;
   onTokenRefresh(userId: string, token: TwitchToken): void;
-  /** `invalid`: Twitch refused the refresh token (reconnect needed); `transient`: try later. */
+  /**
+   * `invalid`: Twitch refused the refresh token (reconnect needed); `app`: it refused the client
+   * ID or secret; `transient`: try later.
+   */
   onRefreshFailure(userId: string, kind: RefreshFailure): void;
+  /** Twitch refused the client ID or secret when asked for the app token. */
+  onAppRejected(): void;
 }
 
-export type RefreshFailure = 'invalid' | 'transient';
+export type RefreshFailure = 'invalid' | 'app' | 'transient';
 
 export type TwitchClientFactory = (options: TwitchClientOptions) => TwitchClient;
 
@@ -77,6 +90,8 @@ export interface TwitchEventHandlers {
   chatMessage(event: TwitchChatMessage): void;
   chatMessageDeleted(event: { messageId: string }): void;
   socket(event: { kind: AccountKind; state: SocketState }): void;
+  /** Twitch ended a subscription, e.g. `authorization_revoked` at twitch.tv/settings/connections. */
+  revoked(event: { kind: AccountKind; status: string }): void;
 }
 
 export interface TwitchListener {
@@ -88,6 +103,8 @@ export interface TwitchClient {
   /** Who the token belongs to. */
   tokenUser(token: TwitchToken): Promise<TwitchAccount>;
   revoke(token: TwitchToken): Promise<void>;
+  /** Fetches the app token; throws `AppCredentialsError` when Twitch refuses the credentials. */
+  verifyApp(): Promise<void>;
   addUser(userId: string, token: TwitchToken): void;
   /** The running stream's start, or null when offline. */
   getStream(broadcasterId: string): Promise<{ readonly since: number } | null>;
@@ -123,10 +140,21 @@ function statusOf(error: unknown): { status: number; body: string } | undefined 
     : undefined;
 }
 
+/** Twitch's token endpoint names the client: `invalid client` (ID), `invalid client secret`. */
+const INVALID_CLIENT = /invalid client/i;
+
 /** Twitch answers a refused refresh token with 400 (or 401); anything else may pass. */
 export function refreshFailureKind(error: unknown): RefreshFailure {
   const failed = statusOf(error);
-  return failed && (failed.status === 400 || failed.status === 401) ? 'invalid' : 'transient';
+  if (!failed) return 'transient';
+  if (INVALID_CLIENT.test(failed.body)) return 'app';
+  return failed.status === 400 || failed.status === 401 ? 'invalid' : 'transient';
+}
+
+/** Whether an app token request failed because Twitch refused the client ID or secret. */
+export function appCredentialsRefused(error: unknown): boolean {
+  const failed = statusOf(error);
+  return failed !== undefined && [400, 401, 403].includes(failed.status);
 }
 
 /** Twurple throws `ChatMessageDroppedError` when Twitch answers `is_sent: false`. */
@@ -184,6 +212,17 @@ export const createTwurpleClient: TwitchClientFactory = (options) => {
   auth.onRefreshFailure((userId, error) => {
     options.onRefreshFailure(userId, refreshFailureKind(error));
   });
+  // Every app token request (the first one and the retry after a 401) goes through here.
+  const getAppAccessToken = auth.getAppAccessToken.bind(auth);
+  auth.getAppAccessToken = async (forceNew) => {
+    try {
+      return await getAppAccessToken(forceNew);
+    } catch (error) {
+      if (!appCredentialsRefused(error)) throw error;
+      options.onAppRejected();
+      throw new AppCredentialsError({ cause: error });
+    }
+  };
   const api = new ApiClient({ authProvider: auth, logger });
 
   return {
@@ -198,6 +237,9 @@ export const createTwurpleClient: TwitchClientFactory = (options) => {
       const user = await helix(() => api.users.getUserById(userId));
       if (!user) throw new Error(`Twitch user ${userId} not found`);
       return account(user.id, user.name, user.displayName);
+    },
+    async verifyApp() {
+      await auth.getAppAccessToken();
     },
     async revoke(token) {
       await helix(() => revokeToken(clientId, token.accessToken));
@@ -266,6 +308,14 @@ export const createTwurpleClient: TwitchClientFactory = (options) => {
             error: errorText(error),
           });
         handlers.socket({ kind: kindOf(userId), state: 'disconnected' });
+      });
+      /** Ids of the subscriptions made with the bot's token; all others use the broadcaster's. */
+      const botSubscriptions = new Set<string>();
+      listener.onRevoke((subscription, status) => {
+        handlers.revoked({
+          kind: botSubscriptions.has(subscription.id) ? 'bot' : 'broadcaster',
+          status,
+        });
       });
       listener.onSubscriptionCreateFailure((subscription, error) => {
         log.warn('Twitch EventSub subscription failed', {
@@ -340,7 +390,7 @@ export const createTwurpleClient: TwitchClientFactory = (options) => {
       });
 
       if (botId !== undefined) {
-        listener.onChannelChatMessage(b, botId, (e) => {
+        const message = listener.onChannelChatMessage(b, botId, (e) => {
           // Shared chat: messages from the other channels of the session are not this chat's.
           if (e.sourceBroadcasterId !== null && e.sourceBroadcasterId !== b) return;
           const reply =
@@ -360,9 +410,10 @@ export const createTwurpleClient: TwitchClientFactory = (options) => {
             ...(reply ? { reply } : {}),
           });
         });
-        listener.onChannelChatMessageDelete(b, botId, (e) => {
+        const deleted = listener.onChannelChatMessageDelete(b, botId, (e) => {
           handlers.chatMessageDeleted({ messageId: e.messageId });
         });
+        botSubscriptions.add(message.id).add(deleted.id);
       }
 
       listener.start();

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { bot, broadcaster, tokenFor } from './fake-client.ts';
-import { startTwitch } from './helpers.ts';
+import { recordingLogger, startTwitch } from './helpers.ts';
 
 const KEY = 'twitch:roman';
 
@@ -87,6 +87,108 @@ describe('tokens', () => {
     fake.last().options.onRefreshFailure('99', 'invalid');
     expect(await harness.call('twitch.status')).toMatchObject({
       broadcaster: { state: 'connected' },
+    });
+    expect(fake.created).toHaveLength(clients);
+    await harness.stop();
+  });
+});
+
+describe('revoked access', () => {
+  it('a bot revoked at Twitch drops chat at once and keeps stream', async () => {
+    const { fake, harness } = await startTwitch({ accounts: ['broadcaster', 'bot'] });
+    await harness.call('twitch.status');
+    fake.last().handlers().revoked({ kind: 'bot', status: 'authorization_revoked' });
+    expect(await harness.call('twitch.status')).toMatchObject({
+      broadcaster: { state: 'connected' },
+      bot: { state: 'reconnect-required' },
+    });
+    expect(harness.provider('chat.platform', KEY)).toBeUndefined();
+    expect(harness.provider('stream.platform', KEY)).toBeDefined();
+    await harness.stop();
+  });
+
+  it('a revoked broadcaster stops the connection', async () => {
+    const { fake, harness } = await startTwitch({ accounts: ['broadcaster', 'bot'] });
+    await harness.call('twitch.status');
+    fake.last().handlers().revoked({ kind: 'broadcaster', status: 'user_removed' });
+    expect(await harness.call('twitch.status')).toMatchObject({
+      broadcaster: { state: 'reconnect-required' },
+    });
+    expect(harness.provider('stream.platform', KEY)).toBeUndefined();
+    await harness.stop();
+  });
+
+  it('other revocations are only logged', async () => {
+    const logger = recordingLogger();
+    const { fake, harness } = await startTwitch({ accounts: ['broadcaster', 'bot'], logger });
+    await harness.call('twitch.status');
+    fake.last().handlers().revoked({ kind: 'broadcaster', status: 'moderator_removed' });
+    expect(await harness.call('twitch.status')).toMatchObject({
+      broadcaster: { state: 'connected' },
+      bot: { state: 'connected' },
+    });
+    expect(logger.lines.some((line) => line.includes('moderator_removed'))).toBe(true);
+    await harness.stop();
+  });
+
+  it('notifications of a replaced connection are ignored', async () => {
+    const logger = recordingLogger();
+    const { fake, harness } = await startTwitch({ accounts: ['broadcaster'], logger });
+    await harness.call('twitch.status');
+    const old = fake.last();
+    await harness.setSecret('clientSecret', 'new-secret');
+    await harness.call('twitch.status');
+    const before = changes(harness.events);
+    old.handlers().socket({ kind: 'broadcaster', state: 'disconnected' });
+    old.handlers().revoked({ kind: 'broadcaster', status: 'authorization_revoked' });
+    expect(await harness.call('twitch.status')).toMatchObject({
+      broadcaster: { state: 'connected' },
+    });
+    expect(changes(harness.events)).toBe(before);
+    expect(logger.lines.filter((line) => line.startsWith('warn'))).toEqual([]);
+    await harness.stop();
+  });
+});
+
+describe('rejected app credentials', () => {
+  it('shows on the status and keeps the connection', async () => {
+    const logger = recordingLogger();
+    const { harness } = await startTwitch({
+      accounts: ['broadcaster', 'bot'],
+      defaults: { appRejected: true },
+      logger,
+    });
+    expect(await harness.call('twitch.status')).toMatchObject({
+      configured: true,
+      credentialsRejected: true,
+      broadcaster: { state: 'connected' },
+      bot: { state: 'connected' },
+    });
+    expect(harness.provider('stream.platform', KEY)).toBeDefined();
+    expect(logger.lines.filter((line) => line.includes('rejected the client'))).toHaveLength(1);
+    await harness.stop();
+  });
+
+  it('a new secret clears it', async () => {
+    const { defaults, harness } = await startTwitch({
+      accounts: ['broadcaster'],
+      defaults: { appRejected: true },
+    });
+    await harness.call('twitch.status');
+    defaults.appRejected = false;
+    await harness.setSecret('clientSecret', 'new-secret');
+    expect(await harness.call('twitch.status')).toMatchObject({ credentialsRejected: false });
+    await harness.stop();
+  });
+
+  it('a refresh refused for the app keeps the account connected', async () => {
+    const { fake, harness } = await startTwitch({ accounts: ['broadcaster', 'bot'] });
+    await harness.call('twitch.status');
+    const clients = fake.created.length;
+    fake.last().options.onRefreshFailure(bot.id, 'app');
+    expect(await harness.call('twitch.status')).toMatchObject({
+      credentialsRejected: true,
+      bot: { state: 'connected' },
     });
     expect(fake.created).toHaveLength(clients);
     await harness.stop();
