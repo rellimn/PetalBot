@@ -231,7 +231,7 @@ export const chatContract = defineContract({
       input: z.object({ to: ReplyTarget, text: Text }),
       output: ReplyResult,
       timeoutMs: 15_000,
-      expose: {panel: "mod"},
+      expose: { panel: 'mod' },
     },
     /** One result per connection; no filter means every connection. */
     broadcast: {
@@ -246,7 +246,7 @@ export const chatContract = defineContract({
     delete: {
       input: z.object({ target: Target, messageId: z.string().min(1) }),
       output: DeleteResult,
-      expose: {panel: "mod"},
+      expose: { panel: 'mod' },
     },
     timeout: {
       input: z.object({
