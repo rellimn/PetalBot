@@ -557,6 +557,9 @@ importers:
       '@petalbot/ui-sdk':
         specifier: workspace:*
         version: link:../../packages/ui-sdk
+      lucide-react:
+        specifier: ^1.55.0
+        version: 1.55.0(@types/react@19.3.0)(react@19.3.0)
       react:
         specifier: ^19.3.0
         version: 19.3.0

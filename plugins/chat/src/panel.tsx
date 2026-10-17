@@ -5,10 +5,12 @@
  * than one connection each message names its connection, and a picker chooses where to send.
  */
 import { useState } from 'react';
+import { Trash } from 'lucide-react';
 import {
   Badge,
   Button,
   EmptyState,
+  IconButton,
   Input,
   Select,
   Spinner,
@@ -30,26 +32,43 @@ function Message({
   readonly message: RecentMessage;
   readonly showSource: boolean;
 }) {
+  const deleteMessage = api.chat.delete.useMutation({ error: 'Could not delete message' });
   return (
     <li
       className={styles.message}
       data-from-bot={message.fromBot || undefined}
       data-deleted={message.deleted || undefined}
     >
-      {/* Real spaces between the parts, so screen readers and copies keep the words apart. */}
-      {showSource ? (
-        <>
-          <Badge>{message.source.connection}</Badge>{' '}
-        </>
-      ) : null}
-      {message.fromBot ? (
-        <>
-          <Badge tone="accent">bot</Badge>{' '}
-        </>
-      ) : null}
-      <span className={styles.author}>{message.user.displayName}:</span>{' '}
-      <span className={styles.text}>{message.text}</span>
-      {message.deleted ? <span className={styles.note}> (deleted)</span> : null}
+      {!message.deleted && (
+        <IconButton
+          className={styles.deleteMessage}
+          label="Delete Message"
+          icon={Trash}
+          size="md"
+          onClick={() => {
+            deleteMessage.mutate({
+              target: { connection: message.source.connection },
+              messageId: message.id,
+            });
+          }}
+        />
+      )}
+      <div className={styles.messageContent}>
+        {/* Real spaces between the parts, so screen readers and copies keep the words apart. */}
+        {showSource ? (
+          <>
+            <Badge>{message.source.connection}</Badge>{' '}
+          </>
+        ) : null}
+        {message.fromBot ? (
+          <>
+            <Badge tone="accent">bot</Badge>{' '}
+          </>
+        ) : null}
+        <span className={styles.author}>{message.user.displayName}:</span>{' '}
+        <span className={styles.text}>{message.text}</span>
+        {message.deleted ? <span className={styles.note}> (deleted)</span> : null}
+      </div>
     </li>
   );
 }

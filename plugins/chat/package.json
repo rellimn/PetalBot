@@ -19,7 +19,8 @@
     "@petalbot/sdk": "workspace:*",
     "@petalbot/ui-sdk": "workspace:*",
     "react": "^19.3.0",
-    "zod": "^4.6.5"
+    "zod": "^4.6.5",
+    "lucide-react": "^1.55.0"
   },
   "devDependencies": {
     "@petalbot/testing": "workspace:*",

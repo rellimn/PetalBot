@@ -33,6 +33,8 @@ export const api = createPluginClient(chatContract, {
   mutations: {
     // The sent message comes back as chat.message from the platform; nothing to refetch.
     'chat.send': { invalidates: [] },
+    'chat.delete': { invalidates: [] },
+    'chat.reply': { invalidates: [] },
   },
   // Codes not listed here get the generic text of their reason.
   failures: {

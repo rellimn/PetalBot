@@ -17,9 +17,20 @@
 }
 
 .message {
+  display: flex;
+  align-items: center;
+  gap: var(--pb-space-1);
   padding: var(--pb-space-1) var(--pb-space-2);
   border-radius: var(--pb-radius-sm);
   overflow-wrap: anywhere;
+}
+
+.deleteMessage {
+  flex-shrink: 0;
+}
+
+.messageContent {
+  min-width: 0;
 }
 
 /* --pb-accent can be a gradient, so the border uses the accent text color. */
