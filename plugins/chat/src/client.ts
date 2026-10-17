@@ -42,5 +42,9 @@ export const api = createPluginClient(chatContract, {
     'connection-not-found': () =>
       'This chat connection is no longer available. Choose another connection.',
     'ambiguous-target': () => 'Choose a chat connection before sending.',
+    'message-rejected': (failure) =>
+      failure.error.cause === 'duplicate'
+        ? 'Not sent: same as your previous message.'
+        : 'The chat platform did not accept the message.',
   },
 });

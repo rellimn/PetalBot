@@ -65,7 +65,7 @@ except `rateLimitedFailure` from `@petalbot/sdk`. Private platform variants cann
 | `sendVetoed` / `send-vetoed`                       | `forbidden`      | `connection`, `vetoedBy`                 |
 | `providerError` / `provider-error`                 | `platform-error` | `connection`, `capability`               |
 | `permissionDenied` / `permission-denied`           | `forbidden`      | none                                     |
-| `messageRejected` / `message-rejected`             | `platform-error` | none                                     |
+| `messageRejected` / `message-rejected`             | `platform-error` | `cause?` (`duplicate`)                   |
 | `messageNotFound` / `message-not-found`            | `not-found`      | `messageId`                              |
 | `userNotFound` / `user-not-found`                  | `not-found`      | `userId`                                 |
 | `rateLimitedFailure` / `rate-limited`              | `rate-limited`   | none                                     |

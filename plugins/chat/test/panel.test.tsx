@@ -121,6 +121,25 @@ describe('Chat widget', () => {
     expect(box.value).toBe('hello');
   });
 
+  it.each([
+    [{ cause: 'duplicate' }, 'Not sent: same as your previous message.'],
+    [{}, 'The chat platform did not accept the message.'],
+  ])('explains a rejected message (%o)', async (details, text) => {
+    const server = await show([], [connection()]);
+    const box = await screen.findByLabelText<HTMLInputElement>('Message');
+    await userEvent.type(box, 'hello');
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+    act(() => {
+      server.answer('chat.send', {
+        ok: false,
+        reason: 'platform-error',
+        error: { code: 'message-rejected', ...details },
+        message: 'msg_duplicate: identical',
+      });
+    });
+    expect(await screen.findByText(text)).toBeTruthy();
+  });
+
   it('explains a connection disappearing while retaining the draft', async () => {
     const server = await show([], [connection()]);
     const box = await screen.findByLabelText<HTMLInputElement>('Message');

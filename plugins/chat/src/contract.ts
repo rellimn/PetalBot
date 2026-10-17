@@ -124,7 +124,8 @@ export const permissionDenied = defineFailure({
 export const messageRejected = defineFailure({
   code: 'message-rejected',
   reason: 'platform-error',
-  details: z.object({}),
+  /** `duplicate`: the same text as the bot's previous message, which the platform refuses. */
+  details: z.object({ cause: z.enum(['duplicate']).optional() }),
 });
 export const messageNotFound = defineFailure({
   code: 'message-not-found',
@@ -190,7 +191,7 @@ const ReplyTarget = z.object({ id: z.string().min(1), source: Source, user: Chat
 
 export const chatContract = defineContract({
   id: 'chat',
-  version: '3.0.0',
+  version: '3.1.0',
 
   events: {
     message: { schema: ChatMessage, expose: ['panel'] },
